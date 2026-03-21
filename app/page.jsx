@@ -28,7 +28,7 @@ export default function GamePlatform() {
   const [chatInput, setChatInput] = useState('');
 
   // ==========================================
-  // 1. 生命週期與邏輯 (完全保留你的完美 UX)
+  // 1. 生命週期與單一房間鎖定
   // ==========================================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -51,31 +51,43 @@ export default function GamePlatform() {
     return () => unsubscribe();
   }, []);
 
+  // 房間內即時監聽與「自動銷毀/踢除」機制
   useEffect(() => {
     if (view === 'room' && roomId && user) {
+      const roomRef = ref(database, `rooms/${roomId}`);
       const myPlayerRef = ref(database, `rooms/${roomId}/players/${user.uid}`);
+      
+      // 基本保險：斷線時至少先移除自己的玩家身分
       onDisconnect(myPlayerRef).remove();
 
-      set(myPlayerRef, {
-        uid: user.uid,
-        name: user.displayName || '無名氏',
-        joinedAt: serverTimestamp()
-      });
-
-      const roomRef = ref(database, `rooms/${roomId}`);
       const unsubscribe = onValue(roomRef, (snapshot) => {
         const data = snapshot.val();
-        if (!data) {
-          remove(ref(database, `users/${user.uid}/currentRoom`));
+        
+        // 🛡️ 防護 1: 房間不見了，或者「我被踢出了 (不在名單內)」
+        if (!data || !data.players || !data.players[user.uid]) {
+          remove(ref(database, `users/${user.uid}/currentRoom`)); // 解除玩家的房間鎖定
+          onDisconnect(myPlayerRef).cancel(); // 取消斷線任務
+          onDisconnect(roomRef).cancel();     // 取消炸房任務
           setRoomId('');
-          setView('lobby');
+          setView('lobby'); // 🚀 秒回大廳
           return;
         }
 
         const playersList = data.players || {};
+        
+        // 👑 防護 2: 房長繼承 (原本房長離開了，由下一個接手)
         if (!data.info?.hostId || !playersList[data.info.hostId]) {
           update(ref(database, `rooms/${roomId}/info`), { hostId: user.uid });
         }
+        
+        // 💣 防護 3: 孤狼炸房機制 (只剩我一人時，我斷線就直接銷毀房間)
+        const playerIds = Object.keys(playersList);
+        if (playerIds.length === 1 && playerIds[0] === user.uid) {
+          onDisconnect(roomRef).remove(); // 註冊：我斷線就刪除整個房間
+        } else {
+          onDisconnect(roomRef).cancel(); // 有其他人：取消炸房
+        }
+
         setRoomData(data);
       });
 
@@ -83,6 +95,9 @@ export default function GamePlatform() {
     }
   }, [view, roomId, user]);
 
+  // ==========================================
+  // 2. 登入與基礎邏輯
+  // ==========================================
   const handleAuth = async (e) => {
     e.preventDefault();
     const isValidUsername = /^[a-zA-Z0-9]+$/.test(username);
@@ -123,11 +138,17 @@ export default function GamePlatform() {
 
   const isGoogleLinked = user?.providerData?.some(p => p.providerId === 'google.com');
 
+  // ==========================================
+  // 3. 房間操作邏輯 (含資料庫預寫入，防 Bug)
+  // ==========================================
   const handleCreateRoom = () => {
     const newRoomId = Math.floor(1000 + Math.random() * 9000).toString();
     const updates = {};
+    // 預先寫入資料，避免切換畫面時出現時間差 Bug
     updates[`rooms/${newRoomId}/info`] = { hostId: user.uid, status: 'waiting' };
+    updates[`rooms/${newRoomId}/players/${user.uid}`] = { uid: user.uid, name: user.displayName || '無名氏', joinedAt: serverTimestamp() };
     updates[`users/${user.uid}/currentRoom`] = newRoomId;
+    
     update(ref(database), updates).then(() => {
       setRoomId(newRoomId);
       setView('room');
@@ -139,8 +160,11 @@ export default function GamePlatform() {
     if (!joinInput.trim()) return;
     const roomSnap = await get(ref(database, `rooms/${joinInput}`));
     if (!roomSnap.exists()) return alert("找不到這個房間！");
+    
     const updates = {};
+    updates[`rooms/${joinInput}/players/${user.uid}`] = { uid: user.uid, name: user.displayName || '無名氏', joinedAt: serverTimestamp() };
     updates[`users/${user.uid}/currentRoom`] = joinInput;
+    
     update(ref(database), updates).then(() => {
       setRoomId(joinInput);
       setJoinInput('');
@@ -148,20 +172,24 @@ export default function GamePlatform() {
     });
   };
 
-  const handleLeaveRoom = () => {
+  const handleLeaveRoom = async () => {
     const updates = {};
-    updates[`rooms/${roomId}/players/${user.uid}`] = null;
-    updates[`users/${user.uid}/currentRoom`] = null;
-    update(ref(database), updates).then(() => {
-      setRoomId('');
-      setView('lobby');
-    });
+    // 💣 自動銷毀：如果我是房間裡最後一個人，我按離開就連房間一起刪掉
+    if (roomData?.players && Object.keys(roomData.players).length <= 1) {
+      updates[`rooms/${roomId}`] = null;
+    } else {
+      updates[`rooms/${roomId}/players/${user.uid}`] = null;
+    }
+    updates[`users/${user.uid}/currentRoom`] = null; // 解除自己的鎖定
+    
+    await update(ref(database), updates);
+    // UI 會因為 onValue 監聽到變化而自動回大廳
   };
 
   const handleKickPlayer = (targetUid) => {
     const updates = {};
-    updates[`rooms/${roomId}/players/${targetUid}`] = null;
-    updates[`users/${targetUid}/currentRoom`] = null;
+    updates[`rooms/${roomId}/players/${targetUid}`] = null; // 從房間移除
+    updates[`users/${targetUid}/currentRoom`] = null;       // 強制解除對方的鎖定
     update(ref(database), updates);
   };
 
@@ -178,10 +206,9 @@ export default function GamePlatform() {
   };
 
   // ==========================================
-  // 2. 空間運算風 UI (Ultra Glassmorphism + 3rem)
+  // 4. 完美 UI (Ultra Glassmorphism) 保持不變
   // ==========================================
 
-  // 共用的動態光暈背景組件
   const AmbientBackground = () => (
     <div className="fixed inset-0 overflow-hidden pointer-events-none z-0 bg-[#070709]">
       <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-indigo-600/10 blur-[120px] rounded-full mix-blend-screen animate-pulse duration-[10s]"></div>
@@ -201,7 +228,6 @@ export default function GamePlatform() {
     <div className="min-h-screen flex items-center justify-center p-6 text-white font-sans relative selection:bg-white/20">
       <AmbientBackground />
       
-      {/* 3rem 頂級玻璃卡片 */}
       <div className="w-full max-w-md bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-[0_8px_40px_rgba(0,0,0,0.5)] rounded-[3rem] p-10 md:p-14 relative z-10">
         <div className="text-center mb-10">
           <div className="w-16 h-16 bg-white/[0.05] border border-white/10 rounded-3xl mx-auto mb-6 flex items-center justify-center text-2xl shadow-inner backdrop-blur-md">✨</div>
