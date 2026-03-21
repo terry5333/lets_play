@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ref, push, onValue, remove } from 'firebase/database';
+import { ref, push, onValue, remove, update, increment } from 'firebase/database';
 import { database } from '../lib/firebaseConfig';
 
 const COLORS = [
@@ -11,8 +11,11 @@ const COLORS = [
   { name: '電馭紫', hex: '#a855f7' },
   { name: '量子藍', hex: '#3b82f6' },
   { name: '矩陣綠', hex: '#10b981' },
-  { name: '暗物質(橡皮擦)', hex: '#000000' } // 橡皮擦用背景色代替
+  { name: '暗物質(橡皮擦)', hex: '#000000' } 
 ];
+
+// 🤖 系統內建隨機題庫
+const SYSTEM_WORDS = ['蘋果', '太空人', '皮卡丘', '電腦', '珍珠奶茶', '恐龍', '自由女神', '黑洞', '馬桶', '衛生紙', '長頸鹿', '麥克風', '蒙娜麗莎', '蜘蛛人', '火鍋', '吉他', '殭屍', '獨角獸', '魔法陣', '忍者'];
 
 export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
   const [chatInput, setChatInput] = useState('');
@@ -23,12 +26,24 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState(COLORS[0].hex);
   const [lineWidth, setLineWidth] = useState(4);
-  const currentLineRef = useRef([]); // 暫存目前正在畫的這一筆
+  const currentLineRef = useRef([]); 
 
-  const gameState = roomData?.gameState || {};
+  // ⏱️ 計時器狀態
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [customWord, setCustomWord] = useState(''); // 畫家自訂詞彙輸入框
+  const [systemWordChoices, setSystemWordChoices] = useState([]); // 系統隨機給的三個選項
+
+  const gameState = roomData?.gameState || { status: 'waiting' };
+  const rules = roomData?.info?.rules || { drawRounds: 2, drawTime: 60, wordMode: 'system' };
   const isHost = roomData?.info?.hostId === user?.uid;
+  const alivePlayers = gameState.playerQueue || Object.keys(roomData?.players || {});
+  
+  const currentDrawerUid = gameState.playerQueue?.[gameState.currentDrawerIdx];
+  const isMyTurnToDraw = currentDrawerUid === user?.uid;
+  const currentWord = gameState.currentWord || '';
+  const isDrawingState = gameState.status === 'drawing';
 
-  // 🖌️ 1. 監聽 Firebase 畫布資料並重繪
+  // 🖌️ 1. 監聽畫布資料
   useEffect(() => {
     const linesRef = ref(database, `rooms/${roomId}/gameState/lines`);
     const unsub = onValue(linesRef, (snapshot) => {
@@ -38,13 +53,10 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     return () => unsub();
   }, [roomId]);
 
-  // 重繪畫布函數 (支援百分比座標轉回實際像素)
   const redrawCanvas = (lines) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    
-    // 清空畫布
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -53,10 +65,8 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
       if (!line.points || line.points.length < 2) return;
       ctx.beginPath();
       ctx.strokeStyle = line.color;
-      // 橡皮擦放大一點比較好擦
       ctx.lineWidth = line.color === '#000000' ? line.width * 4 : line.width; 
       
-      // 將 0~1 的百分比座標轉換為當前畫布的實際像素
       const startX = line.points[0].x * canvas.width;
       const startY = line.points[0].y * canvas.height;
       ctx.moveTo(startX, startY);
@@ -70,35 +80,30 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     });
   };
 
-  // 🖌️ 2. 滑鼠/手指 操作邏輯
+  // 🖌️ 2. 滑鼠/手指 操作 (只有畫家且在作畫狀態才能畫)
   const getCoordinates = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    // 支援觸控與滑鼠
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    // 計算出 0 ~ 1 的百分比座標
     const x = (clientX - rect.left) / rect.width;
     const y = (clientY - rect.top) / rect.height;
     return { x, y };
   };
 
   const startDrawing = (e) => {
-    // 阻止預設滾動行為
+    if (!isMyTurnToDraw || !isDrawingState) return;
     e.preventDefault(); 
     setIsDrawing(true);
-    const coords = getCoordinates(e);
-    currentLineRef.current = [coords];
+    currentLineRef.current = [getCoordinates(e)];
   };
 
   const draw = (e) => {
-    if (!isDrawing) return;
+    if (!isDrawing || !isMyTurnToDraw || !isDrawingState) return;
     e.preventDefault();
     const coords = getCoordinates(e);
     currentLineRef.current.push(coords);
 
-    // 即時在本地端預覽畫出來的線 (不透過 Firebase，保證極致流暢)
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     ctx.lineCap = 'round';
@@ -116,41 +121,161 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
   const stopDrawing = () => {
     if (!isDrawing) return;
     setIsDrawing(false);
-    
-    // 當一筆畫完(滑鼠放開)時，將這一筆完整傳送至 Firebase
     if (currentLineRef.current.length > 1) {
-      const newLine = {
-        color: color,
-        width: lineWidth,
-        points: currentLineRef.current
-      };
-      push(ref(database, `rooms/${roomId}/gameState/lines`), newLine);
+      push(ref(database, `rooms/${roomId}/gameState/lines`), { color, width: lineWidth, points: currentLineRef.current });
     }
     currentLineRef.current = [];
   };
 
-  // 🗑️ 清空畫布
   const clearCanvas = () => {
-    remove(ref(database, `rooms/${roomId}/gameState/lines`));
+    if (isMyTurnToDraw) remove(ref(database, `rooms/${roomId}/gameState/lines`));
   };
 
-  // 調整 Canvas 實際解析度以適應容器
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas) {
-      // 設定畫布內部解析度 (固定比例或動態適應)
       canvas.width = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
     }
-  }, []);
+  }, [gameState.status]); // 狀態切換時重新抓取寬高
 
-  // 💬 聊天室邏輯
+  // ⏱️ 3. 計時器與狀態導播引擎
+  useEffect(() => {
+    if (gameState.status === 'drawing' && gameState.turnEndTime) {
+      const interval = setInterval(() => {
+        const remaining = Math.max(0, Math.floor((gameState.turnEndTime - Date.now()) / 1000));
+        setTimeLeft(remaining);
+        
+        // 時間到！由畫家或房長觸發結算 (避免多人重複觸發)
+        if (remaining === 0 && (isMyTurnToDraw || isHost)) {
+          endTurn();
+        }
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [gameState.status, gameState.turnEndTime, isMyTurnToDraw, isHost]);
+
+  // 生成系統選項 (只在進入 selecting 時產生一次)
+  useEffect(() => {
+    if (gameState.status === 'selecting' && isMyTurnToDraw) {
+      const shuffled = [...SYSTEM_WORDS].sort(() => 0.5 - Math.random());
+      setSystemWordChoices(shuffled.slice(0, 3));
+    }
+  }, [gameState.status, isMyTurnToDraw]);
+
+  // 🎮 4. 遊戲流程控制
+  const startGame = () => {
+    const players = Object.keys(roomData.players);
+    if (players.length < 2) return alert("至少需要 2 人才能開始！");
+    
+    const updates = {};
+    updates[`rooms/${roomId}/gameState`] = {
+      status: 'selecting',
+      currentDrawerIdx: 0,
+      currentRound: 1,
+      playerQueue: players.sort(() => 0.5 - Math.random()), // 隨機決定作畫順序
+      scores: {},
+      lines: []
+    };
+    update(ref(database), updates);
+  };
+
+  const submitWord = (word) => {
+    if (!word.trim()) return;
+    const updates = {};
+    updates[`rooms/${roomId}/gameState/status`] = 'drawing';
+    updates[`rooms/${roomId}/gameState/currentWord`] = word.trim();
+    updates[`rooms/${roomId}/gameState/turnEndTime`] = Date.now() + (rules.drawTime * 1000);
+    updates[`rooms/${roomId}/gameState/correctGuesserIds`] = []; // 清空猜對名單
+    updates[`rooms/${roomId}/gameState/lines`] = null; // 清空畫布
+    
+    update(ref(database), updates);
+    push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🎨 ${user.displayName} 開始作畫了！大家快猜！`, timestamp: Date.now() });
+  };
+
+  const endTurn = () => {
+    update(ref(database, `rooms/${roomId}/gameState/status`), 'turn_end');
+    
+    // 等待 5 秒後進入下一個人的選詞階段
+    setTimeout(() => {
+      const updates = {};
+      let nextIdx = gameState.currentDrawerIdx + 1;
+      let nextRound = gameState.currentRound;
+      let nextStatus = 'selecting';
+
+      // 檢查是否換回合
+      if (nextIdx >= alivePlayers.length) {
+        nextIdx = 0;
+        nextRound++;
+        if (nextRound > rules.drawRounds) nextStatus = 'game_over';
+      }
+
+      updates[`rooms/${roomId}/gameState/status`] = nextStatus;
+      updates[`rooms/${roomId}/gameState/currentDrawerIdx`] = nextIdx;
+      updates[`rooms/${roomId}/gameState/currentRound`] = nextRound;
+      updates[`rooms/${roomId}/gameState/lines`] = null;
+      update(ref(database), updates);
+    }, 5000);
+  };
+
+  // 💬 5. 聊天與「神級搶答攔截」
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-    push(ref(database, `rooms/${roomId}/chat`), { senderId: user.uid, senderName: user.displayName, avatar: user.photoURL || '', text: chatInput, timestamp: Date.now() });
+
+    const inputTxt = chatInput.trim();
     setChatInput('');
+
+    // 攔截搶答邏輯
+    if (gameState.status === 'drawing') {
+      if (isMyTurnToDraw) {
+        // 畫家不能在作畫時說出答案的字
+        if (inputTxt.includes(currentWord)) {
+          return alert("畫家不可以在聊天室暴雷答案喔！");
+        }
+      } else {
+        // 猜題者邏輯
+        const hasGuessed = gameState.correctGuesserIds?.includes(user.uid);
+        if (!hasGuessed && inputTxt === currentWord) {
+          // 🟢 猜對了！
+          const basePoints = 10;
+          const timeBonus = Math.floor((timeLeft / rules.drawTime) * 20); // 越快猜對加越多分
+          const totalPoints = basePoints + timeBonus;
+
+          const updates = {};
+          // 記錄已猜對
+          const newCorrectIds = [...(gameState.correctGuesserIds || []), user.uid];
+          updates[`rooms/${roomId}/gameState/correctGuesserIds`] = newCorrectIds;
+          
+          // 加分 (猜對者)
+          updates[`rooms/${roomId}/gameState/scores/${user.uid}`] = increment(totalPoints);
+          
+          // 加分 (畫家：每有一個人猜對，畫家得 5 分)
+          updates[`rooms/${roomId}/gameState/scores/${currentDrawerUid}`] = increment(5);
+          
+          // 廣播系統訊息 (不顯示答案)
+          push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🟢 ${user.displayName} 猜對了！獲得 ${totalPoints} 分`, timestamp: Date.now() });
+
+          // 檢查是否所有人都猜對了 (提前結束)
+          if (newCorrectIds.length >= alivePlayers.length - 1 && (isMyTurnToDraw || isHost)) {
+            endTurn();
+          }
+          
+          update(ref(database), updates);
+          return; // 攔截原本的聊天訊息，不讓它印出來
+        }
+      }
+    }
+
+    // 正常發送聊天訊息
+    push(ref(database, `rooms/${roomId}/chat`), { senderId: user.uid, senderName: user.displayName, avatar: user.photoURL || '', text: inputTxt, timestamp: Date.now() });
   };
+
+  // ==========================================
+  // UI 輔助渲染
+  // ==========================================
+  // 把答案變成 "O O O" 給猜題者看
+  const hiddenWord = currentWord.replace(/./g, ' ◯ ');
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col vibe-font relative overflow-hidden selection:bg-emerald-500/20">
@@ -167,91 +292,203 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
           <span className="mr-2 text-xl font-black group-hover:-translate-x-1 transition-transform">←</span>
           <span className="font-mono font-bold tracking-wider text-sm">{roomId}</span>
         </button>
+        
+        {/* 狀態指示器 */}
         <div className="bg-gradient-to-r from-emerald-600 to-cyan-600 px-6 py-2 rounded-full border border-emerald-400/30 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
           <span className="font-extrabold tracking-widest text-xs drop-shadow-md text-white">
-            🎨 你畫我猜：自由塗鴉模式
+            {gameState.status === 'waiting' && '等待房長開始'}
+            {gameState.status === 'selecting' && '畫家選詞中...'}
+            {gameState.status === 'drawing' && `第 ${gameState.currentRound}/${rules.drawRounds} 回合 ⏱️ ${timeLeft}s`}
+            {gameState.status === 'turn_end' && '回合結束'}
+            {gameState.status === 'game_over' && '遊戲結算'}
           </span>
         </div>
-        <div className="flex gap-3">
-          <div className="w-10 h-10 bg-white/5 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10 shadow-inner cursor-pointer hover:bg-white/10">⚙️</div>
+        
+        <div className="flex gap-3 items-center">
+          <span className="text-xs font-bold text-white/50 tracking-widest hidden md:block">回合 {gameState.currentRound || 0}/{rules.drawRounds}</span>
         </div>
       </div>
 
       {/* 畫布與聊天佈局 */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-6 p-4 md:px-8 pb-8 z-10 overflow-hidden">
+      <div className="flex-1 flex flex-col lg:flex-row gap-6 p-4 md:px-8 pb-8 z-10 overflow-hidden relative">
         
         {/* 左側：主畫布區 */}
-        <div className="flex-1 flex flex-col h-full gap-4 max-h-[80vh] lg:max-h-none">
-          {/* 畫布本體 (玻璃擬物) */}
+        <div className="flex-1 flex flex-col h-full gap-4 max-h-[80vh] lg:max-h-none relative">
+          
+          {/* === 狀態蓋板：等待中 === */}
+          {gameState.status === 'waiting' && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-md rounded-[2.5rem] border border-white/10">
+              <h2 className="text-3xl font-black mb-8 tracking-widest text-emerald-400 drop-shadow-[0_0_15px_rgba(52,211,153,0.5)]">🎨 準備發揮你的靈魂畫技</h2>
+              {isHost ? (
+                <button onClick={startGame} className="bg-gradient-to-r from-emerald-400 to-cyan-500 px-12 py-5 rounded-[2rem] text-xl font-black shadow-[0_0_20px_rgba(16,185,129,0.4)] hover:scale-105 active:scale-95 transition-all border border-emerald-300 text-black">
+                  開始遊戲
+                </button>
+              ) : (
+                <div className="px-8 py-4 bg-white/5 rounded-[2rem] border border-white/10 text-white/50 font-bold">等待房長開始...</div>
+              )}
+            </div>
+          )}
+
+          {/* === 狀態蓋板：選詞中 === */}
+          {gameState.status === 'selecting' && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md rounded-[2.5rem] border border-white/10 p-6">
+              {isMyTurnToDraw ? (
+                <div className="w-full max-w-md bg-white/5 border border-white/10 p-8 rounded-[2rem] text-center shadow-2xl animate-in zoom-in duration-300">
+                  <h3 className="text-2xl font-black mb-2 text-emerald-400">輪到你了！</h3>
+                  <p className="text-sm text-white/50 mb-8">請選擇你要畫的題目</p>
+                  
+                  {rules.wordMode === 'drawer' || rules.wordMode === 'custom' ? (
+                    <form onSubmit={(e) => { e.preventDefault(); submitWord(customWord); }} className="space-y-4">
+                      <input 
+                        type="text" required placeholder="輸入你想畫的詞..." value={customWord} onChange={e => setCustomWord(e.target.value)}
+                        className="w-full bg-black/40 border border-white/20 rounded-2xl py-4 px-6 text-center outline-none focus:border-emerald-500 transition-colors"
+                      />
+                      <button className="w-full py-4 rounded-2xl bg-emerald-600 font-bold hover:bg-emerald-500 transition-colors">確認題目</button>
+                    </form>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {systemWordChoices.map((w, i) => (
+                        <button key={i} onClick={() => submitWord(w)} className="py-4 rounded-2xl bg-white/5 border border-white/10 font-bold hover:bg-emerald-500/20 hover:border-emerald-500/50 hover:text-emerald-400 transition-all">
+                          {w}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center animate-pulse">
+                  <div className="text-6xl mb-4">🤔</div>
+                  <h3 className="text-xl font-bold text-white/60">等待 {roomData?.players?.[currentDrawerUid]?.name} 選擇題目...</h3>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* === 狀態蓋板：回合結束 === */}
+          {gameState.status === 'turn_end' && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md rounded-[2.5rem] border border-white/10">
+              <h3 className="text-xl font-bold text-white/50 mb-2 tracking-widest uppercase">本回合答案是</h3>
+              <h2 className="text-5xl font-black text-emerald-400 drop-shadow-[0_0_20px_rgba(52,211,153,0.5)] mb-8 animate-in zoom-in">{currentWord}</h2>
+              <p className="text-sm text-white/30 animate-pulse">準備進入下一回合...</p>
+            </div>
+          )}
+
+          {/* === 狀態蓋板：遊戲結算 === */}
+          {gameState.status === 'game_over' && (
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 backdrop-blur-xl rounded-[2.5rem] border border-white/10 p-6 animate-in fade-in duration-500">
+              <h2 className="text-4xl font-black text-emerald-400 mb-8 drop-shadow-[0_0_20px_rgba(52,211,153,0.5)]">🏆 遊戲結算</h2>
+              <div className="w-full max-w-sm space-y-3 mb-10">
+                {Object.entries(gameState.scores || {}).sort((a, b) => b[1] - a[1]).map(([uid, score], idx) => (
+                  <div key={uid} className={`flex items-center justify-between p-4 rounded-2xl border ${idx === 0 ? 'bg-yellow-500/20 border-yellow-400/50 text-yellow-400 scale-105 shadow-[0_0_15px_rgba(250,204,21,0.2)]' : 'bg-white/5 border-white/10 text-white/80'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full overflow-hidden border border-inherit"><img src={roomData.players[uid]?.avatar} className="w-full h-full object-cover" /></div>
+                      <span className="font-bold">{roomData.players[uid]?.name}</span>
+                    </div>
+                    <span className="font-mono font-black text-xl">{score} pts</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={handleLeaveRoom} className="px-10 py-4 rounded-full bg-white/10 hover:bg-white/20 font-bold transition-colors">返回大廳</button>
+            </div>
+          )}
+
+          {/* 畫布本體 */}
           <div className="flex-1 bg-black/40 backdrop-blur-xl border border-white/10 rounded-[2.5rem] shadow-[0_0_40px_rgba(0,0,0,0.5)] relative overflow-hidden group">
+            
+            {/* 題目提示 (畫家看真實字，猜題者看 OOO) */}
+            {gameState.status === 'drawing' && (
+              <div className="absolute top-6 left-0 right-0 flex justify-center pointer-events-none z-10">
+                <div className="bg-black/60 backdrop-blur-md px-6 py-2 rounded-full border border-white/10 shadow-lg text-center">
+                  <span className="text-[10px] text-white/50 block tracking-widest mb-1 uppercase">
+                    {isMyTurnToDraw ? '你要畫的是' : `${roomData?.players?.[currentDrawerUid]?.name} 正在畫`}
+                  </span>
+                  <span className="text-xl font-black tracking-widest text-emerald-300 drop-shadow-md">
+                    {isMyTurnToDraw ? currentWord : hiddenWord}
+                  </span>
+                </div>
+              </div>
+            )}
+
             <canvas
               ref={canvasRef}
               onPointerDown={startDrawing}
               onPointerMove={draw}
               onPointerUp={stopDrawing}
               onPointerOut={stopDrawing}
-              // 支援手機觸控不滾動
               style={{ touchAction: 'none' }}
-              className={`w-full h-full cursor-crosshair ${color === '#000000' ? 'cursor-cell' : ''}`}
+              className={`w-full h-full ${isMyTurnToDraw && isDrawingState ? (color === '#000000' ? 'cursor-cell' : 'cursor-crosshair') : 'cursor-default pointer-events-none'}`}
             />
-            {/* 浮動提示 */}
-            <div className="absolute top-4 left-6 text-white/30 text-xs font-bold tracking-widest uppercase pointer-events-none">
-              Canvas Sync Active
-            </div>
           </div>
 
-          {/* 工具列 */}
-          <div className="h-20 bg-white/5 backdrop-blur-md border border-white/10 rounded-[2rem] flex items-center justify-between px-6 shadow-lg flex-shrink-0">
-            {/* 顏色選擇器 */}
+          {/* 工具列 (只有畫家能點擊) */}
+          <div className={`h-20 bg-white/5 backdrop-blur-md border border-white/10 rounded-[2rem] flex items-center justify-between px-6 shadow-lg flex-shrink-0 transition-opacity ${!isMyTurnToDraw ? 'opacity-30 pointer-events-none' : ''}`}>
             <div className="flex gap-2 overflow-x-auto scrollbar-hide pr-4">
               {COLORS.map(c => (
                 <button
-                  key={c.hex}
-                  onClick={() => setColor(c.hex)}
-                  title={c.name}
+                  key={c.hex} onClick={() => setColor(c.hex)} title={c.name}
                   className={`w-10 h-10 rounded-full flex-shrink-0 transition-all border-2 ${color === c.hex ? 'scale-110 shadow-[0_0_15px_currentColor]' : 'border-transparent hover:scale-105'}`}
                   style={{ backgroundColor: c.hex === '#000000' ? '#262626' : c.hex, borderColor: color === c.hex ? '#fff' : 'transparent', color: c.hex }}
                 >
-                  {c.hex === '#000000' && <span className="text-white text-xs block mt-2.5">Eraser</span>}
+                  {c.hex === '#000000' && <span className="text-white text-[10px] font-bold block mt-2.5">橡皮</span>}
                 </button>
               ))}
             </div>
 
             <div className="flex items-center gap-4 border-l border-white/10 pl-4">
-              {/* 粗細調整 */}
-              <div className="flex gap-2 items-center mr-2">
+              <div className="flex gap-2 items-center mr-2 hidden sm:flex">
                 <div className="w-2 h-2 rounded-full bg-white/50"></div>
-                <input 
-                  type="range" min="2" max="20" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))}
-                  className="w-24 accent-emerald-500"
-                />
+                <input type="range" min="2" max="20" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} className="w-20 accent-emerald-500" />
                 <div className="w-4 h-4 rounded-full bg-white/80"></div>
               </div>
-              
-              {/* 清空畫布 */}
-              <button onClick={clearCanvas} className="px-4 py-2 bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 rounded-xl text-xs font-bold transition-colors">
+              <button onClick={clearCanvas} className="px-4 py-2 bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 rounded-xl text-xs font-bold transition-colors whitespace-nowrap">
                 🗑️ 清空
               </button>
             </div>
           </div>
         </div>
 
-        {/* 右側：聊天/猜題區 (桌面版顯示，手機版可隱藏/彈出) */}
-        <div className="w-full lg:w-[350px] bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-[2.5rem] flex flex-col overflow-hidden shadow-2xl h-[400px] lg:h-auto">
-          <div className="p-5 border-b border-white/5 bg-white/5 flex justify-between items-center">
-            <h3 className="font-black tracking-widest text-emerald-400 uppercase text-sm">💬 猜題頻道</h3>
-            <span className="text-[10px] text-white/30">{Object.keys(roomData?.players || {}).length} 人在線</span>
-          </div>
+        {/* 右側：玩家列表與聊天區 */}
+        <div className="w-full lg:w-[350px] bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-[2.5rem] flex flex-col overflow-hidden shadow-2xl h-[500px] lg:h-auto z-10 relative">
           
+          {/* 玩家記分板 */}
+          <div className="p-4 border-b border-white/5 bg-black/20 flex gap-2 overflow-x-auto scrollbar-hide">
+            {alivePlayers.map(uid => {
+              const p = roomData.players[uid];
+              const score = gameState.scores?.[uid] || 0;
+              const isDrawingNow = uid === currentDrawerUid;
+              const hasGuessed = gameState.correctGuesserIds?.includes(uid);
+              return (
+                <div key={uid} className={`flex flex-col items-center flex-shrink-0 transition-all ${isDrawingNow ? 'scale-110 mx-2' : 'opacity-80'}`}>
+                  <div className={`w-10 h-10 rounded-full border-2 overflow-hidden relative ${isDrawingNow ? 'border-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]' : (hasGuessed ? 'border-yellow-400' : 'border-white/10')}`}>
+                    <img src={p?.avatar} className="w-full h-full object-cover" />
+                    {hasGuessed && <div className="absolute inset-0 bg-yellow-400/30 flex items-center justify-center text-sm">💡</div>}
+                    {isDrawingNow && <div className="absolute inset-0 bg-emerald-500/30 flex items-center justify-center text-sm">✏️</div>}
+                  </div>
+                  <span className="text-[10px] font-bold mt-1 text-white/80">{score} pt</span>
+                </div>
+              );
+            })}
+          </div>
+
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
             {roomData?.chat && Object.values(roomData.chat).sort((a,b) => a.timestamp - b.timestamp).map((m, i) => {
               const isMe = m.senderId === user?.uid;
+              const isSystem = m.senderId === 'system';
+              
+              if (isSystem) {
+                return (
+                  <div key={i} className="flex justify-center w-full">
+                    <span className="bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold px-4 py-1.5 rounded-full">{m.text}</span>
+                  </div>
+                );
+              }
+
               return (
                 <div key={i} className={`flex gap-3 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
                   <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 bg-white/5 border border-white/10"><img src={m.avatar} className="w-full h-full object-cover" /></div>
                   <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-[75%]`}>
                     {!isMe && <span className="text-[10px] text-white/40 ml-2 mb-1">{m.senderName}</span>}
-                    <div className={`px-4 py-2.5 rounded-2xl text-[13px] ${isMe ? 'bg-emerald-600/80 border border-emerald-500/50 rounded-tr-none shadow-md' : 'bg-white/10 rounded-tl-none'}`}>{m.text}</div>
+                    <div className={`px-4 py-2.5 rounded-2xl text-[13px] ${isMe ? 'bg-white/20 border border-white/10 rounded-tr-none shadow-md' : 'bg-white/5 border border-white/5 rounded-tl-none'}`}>{m.text}</div>
                   </div>
                 </div>
               );
@@ -260,8 +497,8 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
           
           <div className="p-4 border-t border-white/5 bg-black/20">
             <form onSubmit={handleSendMessage} className="relative">
-              <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="輸入你的猜測..." className="w-full bg-white/5 border border-white/10 rounded-full py-4 pl-5 pr-16 outline-none focus:border-emerald-500/50 text-sm placeholder:text-white/20 font-light" />
-              <button className="absolute right-2 top-2 bottom-2 px-4 bg-emerald-600/80 border border-emerald-500/50 rounded-full font-bold text-xs hover:bg-emerald-500 active:scale-95 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)]">發送</button>
+              <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder={isMyTurnToDraw ? "畫家不可以暴雷喔..." : "輸入你的猜測..."} disabled={isMyTurnToDraw && isDrawingState} className="w-full bg-white/5 border border-white/10 rounded-full py-4 pl-5 pr-16 outline-none focus:border-emerald-500/50 text-sm placeholder:text-white/20 font-light disabled:opacity-50 disabled:cursor-not-allowed" />
+              <button disabled={isMyTurnToDraw && isDrawingState} className="absolute right-2 top-2 bottom-2 px-4 bg-white/10 border border-white/20 rounded-full font-bold text-xs hover:bg-white/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed">發送</button>
             </form>
           </div>
         </div>
