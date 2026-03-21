@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ref, push, update, increment } from 'firebase/database';
 import { database } from '../lib/firebaseConfig';
 
@@ -10,7 +10,7 @@ const CARD_DIC = {
   attack: { icon: '🍳', name: '甩鍋卡', theme: 'rose', grad: 'from-[#881337] via-[#ef4444] to-[#e11d48]', glow: 'shadow-[0_0_30px_rgba(239,68,68,0.5)]', desc: '指定一名玩家強制執行一次動作。' },
   see: { icon: '👁️', name: '預言卡', theme: 'purple', grad: 'from-[#4c1d95] via-[#8b5cf6] to-[#7c3aed]', glow: 'shadow-[0_0_30px_rgba(139,92,246,0.5)]', desc: '偷看牌堆頂端的三張牌。' },
   shuffle: { icon: '🔀', name: '洗牌卡', theme: 'cyan', grad: 'from-[#164e63] via-[#06b6d4] to-[#0891b2]', glow: 'shadow-[0_0_30px_rgba(6,182,212,0.5)]', desc: '將牌堆洗勻。' },
-  favor: { icon: '🤲', name: '索要卡', theme: 'amber', grad: 'from-[#78350f] via-[#f59e0b] to-[#d97706]', glow: 'shadow-[0_0_30px_rgba(245,158,11,0.5)]', desc: '隨機抽取下一位玩家一張牌。' },
+  favor: { icon: '🤲', name: '索要卡', theme: 'amber', grad: 'from-[#78350f] via-[#f59e0b] to-[#d97706]', glow: 'shadow-[0_0_30px_rgba(245,158,11,0.5)]', desc: '隨機抽取目標玩家一張牌。' },
   bomb: { icon: '🐈‍⬛💣', name: '炸彈貓', theme: 'neutral', grad: 'from-[#171717] via-[#404040] to-[#262626]', glow: 'shadow-[0_0_40px_rgba(239,68,68,0.7)]', desc: '無拆除卡即淘汰。' }
 };
 
@@ -50,12 +50,24 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
   const [chatInput, setChatInput] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [buckTargetIdx, setBuckTargetIdx] = useState(null);
+  
+  // 🎬 全域動畫狀態
+  const [activeAnim, setActiveAnim] = useState({ type: null, target: null, source: null });
 
   const gameState = roomData?.gameState;
-  // 🛡️ 防護 1：嚴格檢查 gameState 是否存在
+  const isFinished = roomData?.info?.status === 'finished';
+  
   if (!gameState) return <div className="min-h-screen bg-[#070709] text-white flex items-center justify-center font-mono tracking-widest text-sm"><div className="animate-pulse">LOADING VIBE...</div></div>;
 
-  // 🛡️ 防護 2：使用 Optional Chaining (?.) 確保資料空窗期不會當機
+  // 監聽全域動畫廣播
+  useEffect(() => {
+    if (gameState?.lastAction?.ts) {
+      setActiveAnim(gameState.lastAction);
+      const timer = setTimeout(() => setActiveAnim({ type: null }), 1000); // 動畫維持 1 秒
+      return () => clearTimeout(timer);
+    }
+  }, [gameState?.lastAction?.ts]);
+
   const myHand = gameState?.hands?.[user?.uid] || [];
   const isMyTurn = gameState?.currentTurn === user?.uid;
   const isAlive = gameState?.alivePlayers?.includes(user?.uid) || false;
@@ -70,12 +82,13 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
   };
 
   const drawCard = () => {
-    if (!isMyTurn || !isAlive || buckTargetIdx !== null) return;
+    if (!isMyTurn || !isAlive || buckTargetIdx !== null || isFinished) return;
     
     const updates = {};
     let newDeck = [...(gameState.deck || [])];
     let newHand = [...myHand];
     let newAlive = [...(gameState.alivePlayers || [])];
+    let newDead = [...(gameState.deadPlayers || [])];
     let newCurrentTurn = gameState.currentTurn;
     let newTurnActionsCount = gameState.turnActionsCount || 1;
     let newDiscard = [...(gameState.discardPile || [])];
@@ -84,6 +97,9 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
     if (newDeck.length === 0) return alert("牌堆沒牌了！");
 
     const drawnCard = newDeck.pop(); 
+    
+    // 廣播摸牌動畫
+    updates[`rooms/${roomId}/gameState/lastAction`] = { type: 'draw', source: user.uid, ts: Date.now() };
 
     if (drawnCard === 'bomb') {
       const defuseIdx = newHand.indexOf('defuse');
@@ -94,11 +110,24 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         newDeck.splice(insertAt, 0, 'bomb');
         push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🔧 ${user?.displayName} 驚險拆除了炸彈！`, timestamp: Date.now() });
       } else {
+        // 💀 被炸死
         newAlive = newAlive.filter(uid => uid !== user?.uid);
+        newDead.push(user.uid); // 紀錄死亡順序
         push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `💥 ${user?.displayName} 被炸死了！`, timestamp: Date.now() });
+        
+        // 🏆 遊戲結算邏輯
         if (newAlive.length === 1) {
-          updates[`users/${newAlive[0]}/score`] = increment(100); 
-          updates[`rooms/${roomId}/info/status`] = 'waiting'; 
+          const winner = newAlive[0];
+          // 名次 = [第一名, 倒數第一死(第二名), 倒數第二死(第三名)...]
+          const rankings = [winner, ...[...newDead].reverse()]; 
+          
+          updates[`rooms/${roomId}/gameState/results`] = rankings;
+          updates[`rooms/${roomId}/info/status`] = 'finished'; 
+          
+          // 結算積分 (1st: 100, 2nd: 50, 3rd: 20)
+          updates[`users/${winner}/score`] = increment(100);
+          if (rankings[1]) updates[`users/${rankings[1]}/score`] = increment(50);
+          if (rankings[2]) updates[`users/${rankings[2]}/score`] = increment(20);
         }
       }
       newTurnActionsCount--; 
@@ -118,6 +147,7 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
     updates[`rooms/${roomId}/gameState/deck`] = newDeck;
     updates[`rooms/${roomId}/gameState/hands/${user?.uid}`] = newHand;
     updates[`rooms/${roomId}/gameState/alivePlayers`] = newAlive;
+    updates[`rooms/${roomId}/gameState/deadPlayers`] = newDead;
     updates[`rooms/${roomId}/gameState/currentTurn`] = newCurrentTurn;
     updates[`rooms/${roomId}/gameState/turnActionsCount`] = newTurnActionsCount;
     updates[`rooms/${roomId}/gameState/discardPile`] = newDiscard;
@@ -127,10 +157,10 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
   };
 
   const playCard = (cardIdx, targetUid = null) => {
-    if (!isMyTurn || !isAlive) return;
+    if (!isMyTurn || !isAlive || isFinished) return;
     const cardId = myHand[cardIdx];
     
-    if (cardId === 'attack' && !targetUid) {
+    if ((cardId === 'attack' || cardId === 'favor') && !targetUid) {
       setBuckTargetIdx(cardIdx);
       return;
     }
@@ -148,6 +178,7 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
 
     switch (cardId) {
       case 'shuffle':
+        updates[`rooms/${roomId}/gameState/lastAction`] = { type: 'shuffle', ts: Date.now() }; // 廣播洗牌動畫
         for (let i = newDeck.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [newDeck[i], newDeck[j]] = [newDeck[j], newDeck[i]];
@@ -164,20 +195,21 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         break;
       
       case 'attack': 
+        updates[`rooms/${roomId}/gameState/lastAction`] = { type: 'favor', target: targetUid, ts: Date.now() }; // 廣播索要/甩鍋動畫
         newCurrentTurn = targetUid;
         newReturnTurn = newReturnTurn || user?.uid; 
         actionMsg = `🍳 ${user?.displayName} 把鍋甩給了 ${roomData?.players?.[targetUid]?.name}！`;
         break;
       
       case 'favor':
-        const target = getNextPlayer(gameState.alivePlayers);
-        const targetHand = gameState.hands?.[target] || [];
+        updates[`rooms/${roomId}/gameState/lastAction`] = { type: 'favor', target: targetUid, ts: Date.now() }; 
+        const targetHand = gameState.hands?.[targetUid] || [];
         if (targetHand.length > 0) {
           const stealIdx = Math.floor(Math.random() * targetHand.length);
           const stolenCard = targetHand.splice(stealIdx, 1)[0];
           newHand.push(stolenCard);
-          updates[`rooms/${roomId}/gameState/hands/${target}`] = targetHand;
-          actionMsg += "，隨機抽走了下一家一張牌！";
+          updates[`rooms/${roomId}/gameState/hands/${targetUid}`] = targetHand;
+          actionMsg += `，從 ${roomData?.players?.[targetUid]?.name} 手上抽走了一張牌！`;
         }
         break;
     }
@@ -202,6 +234,10 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
     update(ref(database), updates);
   };
 
+  const handlePlayAgain = () => {
+    update(ref(database, `rooms/${roomId}/info`), { status: 'waiting' });
+  };
+
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -210,7 +246,8 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
   };
 
   let statusText = '激戰中';
-  if (!isAlive) statusText = '👻 你已成為鬼魂';
+  if (isFinished) statusText = '🏆 遊戲結束';
+  else if (!isAlive) statusText = '👻 你已成為鬼魂';
   else if (isMyTurn) {
     if (gameState?.returnTurn) statusText = '⚠️ 被甩鍋！請出一張牌或摸牌';
     else statusText = `你的回合 (需摸 ${gameState?.turnActionsCount || 1} 張)`;
@@ -218,124 +255,209 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
     statusText = '等待甩鍋結果...';
   }
 
+  const isHost = roomData?.info?.hostId === user?.uid;
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#321c60] via-[#211142] to-[#120726] text-white flex flex-col vibe-font relative overflow-hidden selection:bg-rose-500/20">
-      
-      <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
-        <div className="absolute top-[20%] right-[10%] w-[40%] h-[40%] bg-purple-600/20 blur-[120px] rounded-full animate-pulse duration-[12s]"></div>
-        <div className="absolute bottom-[20%] left-[10%] w-[30%] h-[30%] bg-rose-600/10 blur-[100px] rounded-full animate-pulse duration-[8s]"></div>
-      </div>
+    <>
+      {/* 注入自訂動畫 CSS */}
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes anim-deck-shuffle {
+          0%, 100% { transform: translateX(0) rotate(0); }
+          25% { transform: translateX(-15px) rotate(-10deg) scale(1.1); }
+          75% { transform: translateX(15px) rotate(10deg) scale(1.1); }
+        }
+        @keyframes anim-target-flash {
+          0%, 100% { filter: brightness(1) drop-shadow(0 0 0 rgba(0,0,0,0)); transform: scale(1); }
+          50% { filter: brightness(1.5) drop-shadow(0 0 40px #facc15); transform: scale(1.2); }
+        }
+        @keyframes anim-hand-draw {
+          0% { transform: translateY(50px) scale(0.8); opacity: 0.5; }
+          50% { transform: translateY(-20px) scale(1.1); opacity: 1; }
+          100% { transform: translateY(0) scale(1); opacity: 1; }
+        }
+        .anim-shuffle { animation: anim-deck-shuffle 0.4s ease-in-out 2; }
+        .anim-flash { animation: anim-target-flash 0.5s ease-in-out 2; }
+        .anim-draw { animation: anim-hand-draw 0.4s ease-out forwards; }
+      `}} />
 
-      <div className="flex justify-between items-center p-4 md:p-6 z-10">
-        <button onClick={handleLeaveRoom} className="flex items-center bg-white/5 hover:bg-white/10 px-4 py-2 rounded-full backdrop-blur-md transition-colors border border-white/10 shadow-inner group">
-          <span className="mr-2 text-xl font-black group-hover:-translate-x-1 transition-transform">←</span>
-          <span className="font-mono font-bold tracking-wider text-sm">{roomId}</span>
-        </button>
-        <div className={`px-6 py-2 rounded-full border shadow-lg transition-colors duration-500 ${isMyTurn && isAlive ? (gameState?.returnTurn ? 'bg-rose-500/20 border-rose-400/50 shadow-[0_0_20px_rgba(225,29,72,0.4)]' : 'bg-yellow-500/20 border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.3)]') : 'bg-gradient-to-r from-purple-600 to-indigo-600 border-purple-400/30 shadow-[0_0_20px_rgba(147,51,234,0.3)]'}`}>
-          <span className={`font-extrabold tracking-widest text-xs drop-shadow-md transition-colors duration-500 ${isMyTurn && isAlive ? (gameState?.returnTurn ? 'text-rose-400' : 'text-yellow-400') : 'text-white'}`}>
-            {statusText}
-          </span>
+      <div className="min-h-screen bg-gradient-to-b from-[#321c60] via-[#211142] to-[#120726] text-white flex flex-col vibe-font relative overflow-hidden selection:bg-rose-500/20">
+        
+        <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
+          <div className="absolute top-[20%] right-[10%] w-[40%] h-[40%] bg-purple-600/20 blur-[120px] rounded-full animate-pulse duration-[12s]"></div>
+          <div className="absolute bottom-[20%] left-[10%] w-[30%] h-[30%] bg-rose-600/10 blur-[100px] rounded-full animate-pulse duration-[8s]"></div>
         </div>
-        <div className="flex gap-3">
-          <div className="w-10 h-10 bg-white/5 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10 hover:bg-white/10 transition-colors shadow-inner cursor-pointer">⚙️</div>
-        </div>
-      </div>
 
-      {/* 🛡️ 防護 3：渲染對手列表時，確保 roomData.players 存在且 safely map */}
-      <div className="flex justify-center gap-6 md:gap-12 mt-2 z-10 px-4">
-        {roomData?.players && Object.keys(roomData.players).filter(uid => uid !== user?.uid).map(uid => {
-          const p = roomData.players[uid];
-          const isOpponentAlive = gameState?.alivePlayers?.includes(uid);
-          const handCount = gameState?.hands?.[uid]?.length || 0;
-          const isOpponentTurn = gameState?.currentTurn === uid && isOpponentAlive;
-          const isTargetable = buckTargetIdx !== null && isOpponentAlive; 
+        {/* 頂部列 */}
+        <div className="flex justify-between items-center p-4 md:p-6 z-10">
+          <button onClick={handleLeaveRoom} className="flex items-center bg-white/5 hover:bg-white/10 px-4 py-2 rounded-full backdrop-blur-md transition-colors border border-white/10 shadow-inner group">
+            <span className="mr-2 text-xl font-black group-hover:-translate-x-1 transition-transform">←</span>
+            <span className="font-mono font-bold tracking-wider text-sm">{roomId}</span>
+          </button>
+          <div className={`px-6 py-2 rounded-full border shadow-lg transition-colors duration-500 ${isFinished ? 'bg-orange-500/20 border-orange-400/50 shadow-[0_0_30px_rgba(249,115,22,0.4)]' : (isMyTurn && isAlive ? (gameState?.returnTurn ? 'bg-rose-500/20 border-rose-400/50 shadow-[0_0_20px_rgba(225,29,72,0.4)]' : 'bg-yellow-500/20 border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.3)]') : 'bg-gradient-to-r from-purple-600 to-indigo-600 border-purple-400/30 shadow-[0_0_20px_rgba(147,51,234,0.3)]')}`}>
+            <span className={`font-extrabold tracking-widest text-xs drop-shadow-md transition-colors duration-500 ${isFinished ? 'text-orange-400' : (isMyTurn && isAlive ? (gameState?.returnTurn ? 'text-rose-400' : 'text-yellow-400') : 'text-white')}`}>
+              {statusText}
+            </span>
+          </div>
+          <div className="flex gap-3">
+            <div className="w-10 h-10 bg-white/5 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10 shadow-inner cursor-not-allowed opacity-50">⚙️</div>
+          </div>
+        </div>
+
+        {/* 頂部對手列表 (支援索要/甩鍋發光動畫) */}
+        <div className="flex justify-center gap-6 md:gap-12 mt-2 z-10 px-4">
+          {roomData?.players && Object.keys(roomData.players).filter(uid => uid !== user?.uid).map(uid => {
+            const p = roomData.players[uid];
+            const isOpponentAlive = gameState?.alivePlayers?.includes(uid);
+            const handCount = gameState?.hands?.[uid]?.length || 0;
+            const isOpponentTurn = gameState?.currentTurn === uid && isOpponentAlive;
+            const isTargetable = buckTargetIdx !== null && isOpponentAlive; 
+            const isBeingTargeted = activeAnim.type === 'favor' && activeAnim.target === uid; // 動畫觸發
+            
+            return (
+              <div 
+                key={uid} 
+                onClick={() => { if (isTargetable) { playCard(buckTargetIdx, uid); setBuckTargetIdx(null); } }}
+                className={`flex flex-col items-center transition-all duration-300 ${isBeingTargeted ? 'anim-flash z-50' : ''} ${isTargetable ? 'cursor-pointer hover:scale-125 hover:-translate-y-2' : ''} ${isOpponentTurn ? 'scale-110 opacity-100' : 'opacity-80'} ${!isOpponentAlive && 'grayscale opacity-30'}`}
+              >
+                <div className={`relative w-16 h-16 md:w-20 md:h-20 rounded-full border-[4px] p-1 shadow-[0_10px_20px_rgba(0,0,0,0.5)] transition-all duration-300 ${isTargetable ? 'border-rose-500 shadow-[0_0_30px_rgba(225,29,72,0.8)] animate-pulse bg-rose-950' : (isOpponentTurn ? 'border-yellow-400 bg-[#321c60] shadow-[0_0_25px_rgba(250,204,21,0.6)]' : 'border-indigo-400/50 bg-[#211142]')}`}>
+                  <img src={p?.avatar} alt={p?.name} className="w-full h-full object-cover rounded-full" />
+                  {isOpponentAlive && (
+                    <div className={`absolute -bottom-2 -right-1 text-white text-[11px] font-black px-2.5 py-1 rounded-full border-2 border-[#211142] shadow-lg ${isTargetable ? 'bg-rose-600' : 'bg-gradient-to-br from-indigo-500 to-indigo-700'}`}>
+                      {handCount}
+                    </div>
+                  )}
+                </div>
+                <span className={`mt-3 text-xs font-bold max-w-[90px] truncate drop-shadow-md ${isTargetable ? 'text-rose-400' : 'text-white/90'}`}>
+                  {!isOpponentAlive ? '☠️ ' : ''}{p?.name}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center relative z-10 px-4">
+          <div className="mb-6 h-10 transition-opacity duration-300 flex flex-col items-center">
+            {buckTargetIdx !== null && !isFinished ? (
+              <>
+                <h2 className="text-3xl font-black text-rose-500 drop-shadow-[0_0_20px_rgba(225,29,72,0.8)] animate-pulse tracking-widest">🎯 點擊對手頭像發動！</h2>
+                <button onClick={() => setBuckTargetIdx(null)} className="mt-2 text-xs font-bold bg-white/10 px-4 py-1 rounded-full hover:bg-white/20 transition-colors">取消</button>
+              </>
+            ) : (
+              isMyTurn && isAlive && !isFinished && <h2 className="text-2xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)] animate-pulse tracking-widest">出牌或摸牌！</h2>
+            )}
+          </div>
+
+          <div className={`flex gap-8 md:gap-16 mb-12 transition-all duration-300 ${buckTargetIdx !== null || isFinished ? 'opacity-30 blur-sm pointer-events-none' : ''}`}>
+            
+            {/* 牌堆 (支援洗牌震動動畫) */}
+            <div className={`relative group cursor-pointer ${activeAnim.type === 'shuffle' ? 'anim-shuffle z-50' : ''}`} onClick={drawCard}>
+              <div className={`absolute -left-12 top-6 rounded-full p-2 border-4 z-20 flex flex-col items-center transform -rotate-12 group-hover:rotate-0 transition-all duration-300 bg-white border-slate-100 shadow-[0_10px_20px_rgba(0,0,0,0.3)]`}>
+                <span className="text-rose-500 font-extrabold text-[11px] whitespace-nowrap">爆炸率</span>
+                <span className="text-rose-600 font-black text-lg font-mono">{Math.round((((gameState?.alivePlayers?.length || 1) - 1) / (deckCount || 1)) * 100) || 0}%</span>
+              </div>
+              <div className={`w-36 h-48 md:w-44 md:h-60 rounded-[2.5rem] border-4 flex flex-col items-center justify-center p-4 transition-all duration-300 bg-gradient-to-br from-orange-50 via-orange-200 to-orange-400 border-orange-300 shadow-[0_15px_30px_rgba(0,0,0,0.6)] ${isMyTurn && isAlive ? 'hover:scale-105 shadow-[0_0_30px_rgba(250,204,21,0.3)] border-yellow-300' : ''}`}>
+                <div className="text-6xl md:text-7xl mb-3 drop-shadow-[0_5px_10px_rgba(0,0,0,0.3)]">🐈‍⬛💣</div>
+                <span className="font-black text-xl tracking-wider text-orange-950">剩 {deckCount} 張</span>
+              </div>
+            </div>
+            
+            <div className={`w-36 h-48 md:w-44 md:h-60 backdrop-blur-md rounded-[2.5rem] border-4 flex flex-col items-center justify-center p-4 relative overflow-hidden group transition-all duration-300 bg-white/5 border-white/10 shadow-[0_15px_30px_rgba(0,0,0,0.4)]`}>
+               {lastDiscard && lastDiscard !== 'start' && CARD_DIC[lastDiscard] ? (
+                  <>
+                    <div className="absolute top-4 left-5 flex items-center gap-1.5 font-extrabold text-sm text-white/60">
+                      <span>{CARD_DIC[lastDiscard].icon}</span>{CARD_DIC[lastDiscard].name}
+                    </div>
+                    <div className="text-7xl md:text-8xl mt-4 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] group-hover:scale-110 transition-transform">{CARD_DIC[lastDiscard].icon}</div>
+                  </>
+               ) : (
+                  <div className="text-white/20 font-bold text-sm tracking-widest uppercase">棄牌堆</div>
+               )}
+            </div>
+          </div>
+
+          <div className={`flex gap-4 transition-all duration-300 ${buckTargetIdx !== null || isFinished ? 'opacity-30 pointer-events-none' : ''}`}>
+            <button onClick={drawCard} disabled={!isMyTurn || !isAlive} className={`px-12 py-4 rounded-[2rem] font-black tracking-widest transition-all duration-300 border-2 ${isMyTurn && isAlive ? 'bg-gradient-to-b from-yellow-300 to-yellow-500 text-yellow-950 border-yellow-200 shadow-[0_5px_0_#a16207,0_0_30px_rgba(250,204,21,0.3)] active:translate-y-1 active:shadow-none hover:scale-105' : 'bg-white/5 text-white/30 border-white/5 cursor-not-allowed'}`}>
+              摸牌結束
+            </button>
+          </div>
+        </div>
+
+        {/* 手牌區 (支援摸牌彈出動畫) */}
+        <div className="relative h-64 md:h-72 w-full flex justify-center items-end pb-8 z-10 px-4">
+          <div className={`absolute left-6 bottom-8 flex flex-col items-center z-20 ${!isAlive && 'grayscale opacity-50'}`}>
+            <div className={`w-20 h-20 rounded-full border-4 p-1 bg-[#211142] transition-all duration-300 ${isMyTurn && isAlive && !isFinished ? 'border-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)] scale-110' : 'border-indigo-400/50 shadow-lg'}`}>
+              <img src={user?.photoURL} alt="me" className="w-full h-full object-cover rounded-full" />
+            </div>
+            <div className={`backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-black mt-3 border transition-colors duration-300 tracking-wide shadow-inner ${isMyTurn && isAlive && !isFinished ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-300' : 'bg-purple-900/80 border-purple-500/50 text-white'}`}>
+              {!isAlive ? '☠️ 淘汰' : `我 (${myHand.length})`}
+            </div>
+          </div>
           
-          return (
-            <div 
-              key={uid} 
-              onClick={() => { if (isTargetable) { playCard(buckTargetIdx, uid); setBuckTargetIdx(null); } }}
-              className={`flex flex-col items-center transition-all duration-300 ${isTargetable ? 'cursor-pointer hover:scale-125 hover:-translate-y-2' : ''} ${isOpponentTurn ? 'scale-110 opacity-100' : 'opacity-80'} ${!isOpponentAlive && 'grayscale opacity-30'}`}
-            >
-              <div className={`relative w-16 h-16 md:w-20 md:h-20 rounded-full border-[4px] p-1 shadow-[0_10px_20px_rgba(0,0,0,0.5)] transition-all duration-300 ${isTargetable ? 'border-rose-500 shadow-[0_0_30px_rgba(225,29,72,0.8)] animate-pulse bg-rose-950' : (isOpponentTurn ? 'border-yellow-400 bg-[#321c60] shadow-[0_0_25px_rgba(250,204,21,0.6)]' : 'border-indigo-400/50 bg-[#211142]')}`}>
-                <img src={p?.avatar} alt={p?.name} className="w-full h-full object-cover rounded-full" />
-                {isOpponentAlive && (
-                  <div className={`absolute -bottom-2 -right-1 text-white text-[11px] font-black px-2.5 py-1 rounded-full border-2 border-[#211142] shadow-lg ${isTargetable ? 'bg-rose-600' : 'bg-gradient-to-br from-indigo-500 to-indigo-700'}`}>
-                    {handCount}
+          <div className={`flex px-24 overflow-x-auto w-full justify-center max-w-5xl scrollbar-hide pb-6 pt-10 ${activeAnim.type === 'draw' && activeAnim.source === user.uid ? 'anim-draw' : ''}`}>
+            {myHand.map((cardId, idx) => (
+              <PlayingCard key={idx} cardId={cardId} isMyTurn={isMyTurn && isAlive && !isFinished} isTargeting={buckTargetIdx !== null} idx={idx} onClick={() => playCard(idx)} />
+            ))}
+          </div>
+
+          <button onClick={() => setIsChatOpen(!isChatOpen)} className={`absolute right-6 bottom-8 w-14 h-14 rounded-full flex items-center justify-center text-2xl border transition-all duration-300 z-20 bg-purple-600/80 border-purple-400/50 shadow-lg hover:bg-purple-500 active:scale-95`}>💬</button>
+        </div>
+
+        {/* 🏆 史詩級結算畫面 (遊戲結束時彈出) */}
+        {isFinished && (
+          <div className="absolute inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-xl animate-in fade-in zoom-in duration-700">
+            <div className="w-full max-w-lg bg-white/[0.03] border border-white/10 rounded-[3rem] p-10 flex flex-col items-center shadow-[0_20px_50px_rgba(0,0,0,0.5)] relative overflow-hidden">
+              <div className="absolute -top-32 -left-32 w-64 h-64 bg-orange-500/20 blur-[100px] rounded-full mix-blend-screen pointer-events-none"></div>
+              
+              <h2 className="text-4xl font-black text-white mb-2 tracking-widest drop-shadow-lg">遊戲結算</h2>
+              <p className="text-white/40 text-xs tracking-[0.3em] uppercase mb-10 font-mono">Game Results</p>
+              
+              <div className="w-full space-y-4 mb-10 relative z-10">
+                {gameState.results?.map((uid, index) => {
+                  const p = roomData.players[uid];
+                  let rankStyle = "bg-white/5 border-white/10 text-white/50 grayscale";
+                  let rankText = "💀 陣亡";
+                  let pts = "+0";
+                  
+                  if (index === 0) { rankStyle = "bg-yellow-500/10 border-yellow-400/50 text-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.2)] scale-105 z-10"; rankText = "🥇 第一名"; pts = "+100"; }
+                  else if (index === 1) { rankStyle = "bg-slate-300/10 border-slate-300/40 text-slate-300"; rankText = "🥈 第二名"; pts = "+50"; }
+                  else if (index === 2) { rankStyle = "bg-orange-500/10 border-orange-400/40 text-orange-400"; rankText = "🥉 第三名"; pts = "+20"; }
+
+                  return (
+                    <div key={uid} className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${rankStyle}`}>
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-inherit">
+                          <img src={p?.avatar} alt={p?.name} className="w-full h-full object-cover" />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="font-bold text-sm text-white">{p?.name}</span>
+                          <span className="text-[10px] font-black uppercase tracking-wider">{rankText}</span>
+                        </div>
+                      </div>
+                      <div className="font-mono font-black text-xl drop-shadow-md">{pts} PTS</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex gap-4 w-full relative z-10">
+                <button onClick={handleLeaveRoom} className="flex-1 py-4 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 font-bold text-sm transition-colors text-white/70 hover:text-white">
+                  返回大廳
+                </button>
+                {isHost ? (
+                  <button onClick={handlePlayAgain} className="flex-1 py-4 rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600 font-black text-sm text-white shadow-[0_0_20px_rgba(16,185,129,0.4)] hover:scale-105 active:scale-95 transition-all border border-emerald-300">
+                    再來一局
+                  </button>
+                ) : (
+                  <div className="flex-1 py-4 rounded-full bg-white/5 border border-white/10 font-bold text-sm text-white/40 flex items-center justify-center">
+                    等待房長開啟...
                   </div>
                 )}
               </div>
-              <span className={`mt-3 text-xs font-bold max-w-[90px] truncate drop-shadow-md ${isTargetable ? 'text-rose-400' : 'text-white/90'}`}>
-                {!isOpponentAlive ? '☠️ ' : ''}{p?.name}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="flex-1 flex flex-col items-center justify-center relative z-10 px-4">
-        <div className="mb-6 h-10 transition-opacity duration-300 flex flex-col items-center">
-          {buckTargetIdx !== null ? (
-            <>
-              <h2 className="text-3xl font-black text-rose-500 drop-shadow-[0_0_20px_rgba(225,29,72,0.8)] animate-pulse tracking-widest">🎯 請點擊上方對手頭像甩鍋！</h2>
-              <button onClick={() => setBuckTargetIdx(null)} className="mt-2 text-xs font-bold bg-white/10 px-4 py-1 rounded-full hover:bg-white/20 transition-colors">取消甩鍋</button>
-            </>
-          ) : (
-            isMyTurn && isAlive && <h2 className="text-2xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)] animate-pulse tracking-widest">點擊出牌，或摸牌結束回合！</h2>
-          )}
-        </div>
-
-        <div className={`flex gap-8 md:gap-16 mb-12 transition-all duration-300 ${buckTargetIdx !== null ? 'opacity-30 blur-sm pointer-events-none' : ''}`}>
-          <div className="relative group cursor-pointer" onClick={drawCard}>
-            <div className={`absolute -left-12 top-6 rounded-full p-2 border-4 z-20 flex flex-col items-center transform -rotate-12 group-hover:rotate-0 transition-all duration-300 bg-white border-slate-100 shadow-[0_10px_20px_rgba(0,0,0,0.3)]`}>
-              <span className="text-rose-500 font-extrabold text-[11px] whitespace-nowrap">爆炸率</span>
-              <span className="text-rose-600 font-black text-lg font-mono">{Math.round((((gameState?.alivePlayers?.length || 1) - 1) / (deckCount || 1)) * 100) || 0}%</span>
-            </div>
-            <div className={`w-36 h-48 md:w-44 md:h-60 rounded-[2.5rem] border-4 flex flex-col items-center justify-center p-4 transition-all duration-300 bg-gradient-to-br from-orange-50 via-orange-200 to-orange-400 border-orange-300 shadow-[0_15px_30px_rgba(0,0,0,0.6)] ${isMyTurn && isAlive ? 'hover:scale-105 shadow-[0_0_30px_rgba(250,204,21,0.3)] border-yellow-300' : ''}`}>
-              <div className="text-6xl md:text-7xl mb-3 drop-shadow-[0_5px_10px_rgba(0,0,0,0.3)]">🐈‍⬛💣</div>
-              <span className="font-black text-xl tracking-wider text-orange-950">剩 {deckCount} 張</span>
             </div>
           </div>
-          
-          <div className={`w-36 h-48 md:w-44 md:h-60 backdrop-blur-md rounded-[2.5rem] border-4 flex flex-col items-center justify-center p-4 relative overflow-hidden group transition-all duration-300 bg-white/5 border-white/10 shadow-[0_15px_30px_rgba(0,0,0,0.4)]`}>
-             {lastDiscard && lastDiscard !== 'start' && CARD_DIC[lastDiscard] ? (
-                <>
-                  <div className="absolute top-4 left-5 flex items-center gap-1.5 font-extrabold text-sm text-white/60">
-                    <span>{CARD_DIC[lastDiscard].icon}</span>{CARD_DIC[lastDiscard].name}
-                  </div>
-                  <div className="text-7xl md:text-8xl mt-4 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] group-hover:scale-110 transition-transform">{CARD_DIC[lastDiscard].icon}</div>
-                </>
-             ) : (
-                <div className="text-white/20 font-bold text-sm tracking-widest uppercase">棄牌堆</div>
-             )}
-          </div>
-        </div>
+        )}
 
-        <div className={`flex gap-4 transition-all duration-300 ${buckTargetIdx !== null ? 'opacity-30 pointer-events-none' : ''}`}>
-          <button onClick={drawCard} disabled={!isMyTurn || !isAlive} className={`px-12 py-4 rounded-[2rem] font-black tracking-widest transition-all duration-300 border-2 ${isMyTurn && isAlive ? 'bg-gradient-to-b from-yellow-300 to-yellow-500 text-yellow-950 border-yellow-200 shadow-[0_5px_0_#a16207,0_0_30px_rgba(250,204,21,0.3)] active:translate-y-1 active:shadow-none hover:scale-105' : 'bg-white/5 text-white/30 border-white/5 cursor-not-allowed'}`}>
-            摸牌結束
-          </button>
-        </div>
-      </div>
-
-      <div className="relative h-64 md:h-72 w-full flex justify-center items-end pb-8 z-10 px-4">
-        <div className={`absolute left-6 bottom-8 flex flex-col items-center z-20 ${!isAlive && 'grayscale opacity-50'}`}>
-          <div className={`w-20 h-20 rounded-full border-4 p-1 bg-[#211142] transition-all duration-300 ${isMyTurn && isAlive ? 'border-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)] scale-110' : 'border-indigo-400/50 shadow-lg'}`}>
-            <img src={user?.photoURL} alt="me" className="w-full h-full object-cover rounded-full" />
-          </div>
-          <div className={`backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-black mt-3 border transition-colors duration-300 tracking-wide shadow-inner ${isMyTurn && isAlive ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-300' : 'bg-purple-900/80 border-purple-500/50 text-white'}`}>
-            {!isAlive ? '☠️ 淘汰' : `我 (${myHand.length})`}
-          </div>
-        </div>
-        
-        <div className="flex px-24 overflow-x-auto w-full justify-center max-w-5xl scrollbar-hide pb-6 pt-10">
-          {myHand.map((cardId, idx) => (
-            <PlayingCard key={idx} cardId={cardId} isMyTurn={isMyTurn && isAlive} isTargeting={buckTargetIdx !== null} idx={idx} onClick={() => playCard(idx)} />
-          ))}
-        </div>
-
-        <button onClick={() => setIsChatOpen(!isChatOpen)} className={`absolute right-6 bottom-8 w-14 h-14 rounded-full flex items-center justify-center text-2xl border transition-all duration-300 z-20 bg-purple-600/80 border-purple-400/50 shadow-lg hover:bg-purple-500 active:scale-95`}>💬</button>
-      </div>
-
+      {/* ... 側邊聊天室保持不變 ... */}
       <div className={`fixed top-0 right-0 h-full w-full md:w-[400px] bg-[#120726]/95 backdrop-blur-3xl shadow-2xl border-l border-white/10 z-50 transform transition-transform duration-300 ease-in-out ${isChatOpen ? 'translate-x-0' : 'translate-x-full'} flex flex-col`}>
         <div className="p-6 flex justify-between items-center border-b border-white/10">
           <h3 className="font-bold tracking-widest uppercase">Room Chat</h3>
@@ -362,6 +484,8 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
           </form>
         </div>
       </div>
-    </div>
+      
+      </div>
+    </>
   );
 }
