@@ -13,16 +13,14 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
     const playerIds = Object.keys(roomData.players || {});
     if (playerIds.length < 2) return alert("至少需要 2 名玩家才能開始互相陷害！");
 
-    // 1. 定義卡牌庫 (扣除炸彈與拆除)
     const baseCards = [
-      ...Array(4).fill('skip'),   // 跳過 4張
-      ...Array(4).fill('attack'), // 攻擊 4張
-      ...Array(5).fill('see'),    // 預言(查看未來) 5張
-      ...Array(4).fill('shuffle'),// 洗牌 4張
-      ...Array(4).fill('favor')   // 索要(偷取) 4張
+      ...Array(4).fill('skip'),   
+      ...Array(4).fill('attack'), 
+      ...Array(5).fill('see'),    
+      ...Array(4).fill('shuffle'),
+      ...Array(4).fill('favor')   
     ];
 
-    // 洗牌演算法 (Fisher-Yates)
     const shuffleArray = (array) => {
       for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -34,17 +32,13 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
     let shuffledBaseDeck = shuffleArray([...baseCards]);
     const initialHands = {};
 
-    // 2. 發牌給每位玩家：1 張拆除 + 4 張隨機卡
     playerIds.forEach(uid => {
-      initialHands[uid] = ['defuse']; // 保底一張拆除卡
-      for (let i = 0; i < 4; i++) {
-        initialHands[uid].push(shuffledBaseDeck.pop());
-      }
+      initialHands[uid] = ['defuse']; 
+      for (let i = 0; i < 4; i++) initialHands[uid].push(shuffledBaseDeck.pop());
     });
 
-    // 3. 將剩下的拆除卡與炸彈貓放入牌堆並再次洗牌
     const remainingDefuseCount = playerIds.length === 2 ? 2 : 6 - playerIds.length;
-    const bombCount = playerIds.length - 1; // 炸彈數量 = 玩家數 - 1
+    const bombCount = playerIds.length - 1; 
     
     let finalDeck = [
       ...shuffledBaseDeck,
@@ -53,15 +47,14 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
     ];
     finalDeck = shuffleArray(finalDeck);
 
-    // 4. 將初始遊戲狀態寫入 Firebase
     const gameState = {
       deck: finalDeck,
-      discardPile: ['start'], // 初始棄牌堆
+      discardPile: ['start'], 
       hands: initialHands,
-      currentTurn: playerIds[0], // 房長先手
-      turnActionsCount: 1,       // 預設這回合要抽 1 張牌
+      currentTurn: playerIds[0], 
+      turnActionsCount: 1,       
       alivePlayers: playerIds,
-      explosionState: null       // 紀錄是否有人抽到炸彈
+      returnTurn: null           
     };
 
     const updates = {};
@@ -77,10 +70,8 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
     setChatInput('');
   };
 
-  // ... (下方的 UI 渲染保持不變，保留你現在漂亮的大廳畫面)
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#321c60] via-[#211142] to-[#120726] text-white flex flex-col font-sans relative overflow-hidden">
-      {/* 頂部狀態列 */}
       <div className="flex justify-between items-center p-4 md:p-6 z-10">
         <button onClick={handleLeaveRoom} className="flex items-center bg-white/10 hover:bg-white/20 px-4 py-2 rounded-full backdrop-blur-md transition-colors border border-white/10">
           <span className="mr-2 text-xl font-black">←</span>
@@ -94,7 +85,6 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
         </div>
       </div>
 
-      {/* 頂部對手列表 */}
       <div className="flex justify-center gap-4 md:gap-10 mt-6 z-10">
         {(roomData?.players ? Object.values(roomData.players) : []).filter(p => p.uid !== user?.uid).map(p => (
           <div key={p.uid} className="flex flex-col items-center">
@@ -106,7 +96,6 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
         ))}
       </div>
 
-      {/* 中央提示區 */}
       <div className="flex-1 flex flex-col items-center justify-center relative z-10 animate-in zoom-in duration-500">
         <h3 className="text-2xl font-black mb-8 text-white/60 tracking-widest">等待所有玩家入座...</h3>
         {isHost ? (
@@ -118,7 +107,6 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
         )}
       </div>
 
-      {/* 底部自身頭像與聊天按鈕 */}
       <div className="relative h-48 md:h-56 w-full flex justify-center items-end pb-8 z-10">
         <div className="absolute left-6 bottom-8 flex flex-col items-center">
           <div className="w-20 h-20 rounded-full border-4 border-yellow-400 p-1 bg-[#211142] shadow-[0_0_20px_rgba(250,204,21,0.5)] z-20">
@@ -129,7 +117,6 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
         <button onClick={() => setIsChatOpen(!isChatOpen)} className="absolute right-6 bottom-8 w-14 h-14 bg-purple-600/80 rounded-full flex items-center justify-center text-2xl shadow-lg border border-purple-400/50 hover:bg-purple-500 transition-colors">💬</button>
       </div>
 
-      {/* 側邊聊天室 */}
       <div className={`fixed top-0 right-0 h-full w-full md:w-[400px] bg-[#120726]/95 backdrop-blur-3xl shadow-2xl border-l border-white/10 z-50 transform transition-transform duration-300 ease-in-out ${isChatOpen ? 'translate-x-0' : 'translate-x-full'} flex flex-col`}>
         <div className="p-6 flex justify-between items-center border-b border-white/10">
           <h3 className="font-bold tracking-widest uppercase">Room Chat</h3>
