@@ -8,11 +8,14 @@ import {
 import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove, get, query, orderByChild, limitToLast, increment } from 'firebase/database';
 import { auth, database, googleProvider } from '../lib/firebaseConfig';
 
+// 引入我們所有的子元件
 import Lobby from '../components/Lobby';
 import WaitingRoom from '../components/WaitingRoom';
 import BoomCat from '../components/BoomCat';
+import DrawGuess from '../components/DrawGuess';
 
 export default function GamePlatform() {
+  // 狀態管理
   const [user, setUser] = useState(null);
   const [view, setView] = useState('loading'); 
   
@@ -26,10 +29,14 @@ export default function GamePlatform() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [myScore, setMyScore] = useState(0); 
 
+  // ==========================================
+  // 1. 生命週期與全域資料同步
+  // ==========================================
   useEffect(() => {
     let userScoreUnsub; 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
+        // 擷取並升級 Google 高清頭像
         let activeAvatar = currentUser.photoURL;
         const googleData = currentUser.providerData.find(p => p.providerId === 'google.com');
         if (googleData && googleData.photoURL) {
@@ -48,10 +55,12 @@ export default function GamePlatform() {
         if (userData.score === undefined) updates.score = 0;
         await update(userRef, updates);
 
+        // 獨立監聽個人分數
         userScoreUnsub = onValue(userRef, (snap) => {
           if (snap.exists()) setMyScore(snap.val().score || 0);
         });
 
+        // 判斷是否在房間內
         const activeRoom = userData.currentRoom;
         if (activeRoom) {
           setRoomId(activeRoom);
@@ -68,6 +77,7 @@ export default function GamePlatform() {
     return () => { unsubscribe(); if (userScoreUnsub) userScoreUnsub(); };
   }, []);
 
+  // 監聽排行榜
   useEffect(() => {
     if (view === 'lobby') {
       const topUsersQuery = query(ref(database, 'users'), orderByChild('score'), limitToLast(10));
@@ -82,6 +92,7 @@ export default function GamePlatform() {
     }
   }, [view]);
 
+  // 房間內即時監聽與斷線處理
   useEffect(() => {
     if (view === 'room' && roomId && user) {
       const roomRef = ref(database, `rooms/${roomId}`);
@@ -102,6 +113,7 @@ export default function GamePlatform() {
         }
 
         const playersList = data.players || {};
+        // 精準更新 hostId，避免覆寫狀態
         if (!data.info?.hostId || !playersList[data.info.hostId]) {
           update(ref(database), { [`rooms/${roomId}/info/hostId`]: user.uid });
         }
@@ -116,6 +128,9 @@ export default function GamePlatform() {
     }
   }, [view, roomId, user]);
 
+  // ==========================================
+  // 2. 操作邏輯
+  // ==========================================
   const handleAuth = async (e) => {
     e.preventDefault();
     const fakeEmail = `${username.toLowerCase()}@gamebar.local`;
@@ -157,7 +172,7 @@ export default function GamePlatform() {
     update(ref(database, `users/${user.uid}`), { avatar: newAvatar });
   };
 
-  // 💡 接收 Lobby 傳來的遊戲模式與規則
+  // 創建房間 (接收遊戲模式與規則)
   const handleCreateRoom = (gameMode = 'boomcat', rules = {}) => {
     const newRoomId = Math.floor(1000 + Math.random() * 9000).toString();
     const updates = {};
@@ -173,11 +188,11 @@ export default function GamePlatform() {
     update(ref(database), updates).then(() => { setRoomId(newRoomId); setView('room'); });
   };
 
+  // 加入房間 (檢查人數上限)
   const handleJoinRoom = async (joinInput) => {
     const roomSnap = await get(ref(database, `rooms/${joinInput}`));
     if (!roomSnap.exists()) return alert("找不到房間！");
     
-    // 檢查房間人數上限
     const roomInfo = roomSnap.val().info;
     const currentPlayersCount = Object.keys(roomSnap.val().players || {}).length;
     if (roomInfo?.rules?.maxPlayers && currentPlayersCount >= roomInfo.rules.maxPlayers) {
@@ -200,6 +215,9 @@ export default function GamePlatform() {
 
   const handleWinGameDemo = () => update(ref(database, `users/${user.uid}`), { score: increment(50) });
 
+  // ==========================================
+  // 3. UI 渲染區塊
+  // ==========================================
   const AmbientBackground = () => (
     <div className="fixed inset-0 overflow-hidden pointer-events-none z-0 bg-[#070709]">
       <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-indigo-600/10 blur-[120px] rounded-full mix-blend-screen animate-pulse duration-[10s]"></div>
@@ -215,12 +233,14 @@ export default function GamePlatform() {
         
         {['loading', 'login', 'lobby'].includes(view) && <AmbientBackground />}
 
+        {/* 🟡 載入中 */}
         {view === 'loading' && (
           <div className="h-screen flex items-center justify-center relative z-10">
             <div className="animate-pulse font-light text-white/70 tracking-[0.5em] text-sm">SYNCING VIBE...</div>
           </div>
         )}
 
+        {/* 🟢 登入畫面 */}
         {view === 'login' && (
           <div className="h-screen flex items-center justify-center p-6 relative z-10 text-white">
             <div className="w-full max-w-md bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-10 md:p-14">
@@ -238,6 +258,7 @@ export default function GamePlatform() {
           </div>
         )}
 
+        {/* 🔵 遊戲大廳 */}
         {view === 'lobby' && (
           <Lobby 
             user={user} myScore={myScore} leaderboard={leaderboard} 
@@ -248,7 +269,8 @@ export default function GamePlatform() {
           />
         )}
 
-        {view === 'room' && roomData?.info?.status === 'waiting' && (
+        {/* 🟣 炸彈貓 - 等待室 */}
+        {view === 'room' && roomData?.info?.gameMode === 'boomcat' && roomData?.info?.status === 'waiting' && (
           <WaitingRoom 
             user={user} roomId={roomId} roomData={roomData} 
             isHost={roomData?.info?.hostId === user?.uid} 
@@ -256,8 +278,17 @@ export default function GamePlatform() {
           />
         )}
 
-        {view === 'room' && ['playing', 'finished'].includes(roomData?.info?.status) && (
+        {/* 💣 炸彈貓 - 戰鬥中 / 結算 */}
+        {view === 'room' && roomData?.info?.gameMode === 'boomcat' && ['playing', 'finished'].includes(roomData?.info?.status) && (
           <BoomCat 
+            user={user} roomId={roomId} roomData={roomData} 
+            handleLeaveRoom={handleLeaveRoom} 
+          />
+        )}
+
+        {/* 🎨 你畫我猜 - 測試畫布 (直接涵蓋所有狀態) */}
+        {view === 'room' && roomData?.info?.gameMode === 'drawguess' && (
+          <DrawGuess 
             user={user} roomId={roomId} roomData={roomData} 
             handleLeaveRoom={handleLeaveRoom} 
           />
