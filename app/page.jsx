@@ -157,10 +157,17 @@ export default function GamePlatform() {
     update(ref(database, `users/${user.uid}`), { avatar: newAvatar });
   };
 
-  const handleCreateRoom = () => {
+  // 💡 接收 Lobby 傳來的遊戲模式與規則
+  const handleCreateRoom = (gameMode = 'boomcat', rules = {}) => {
     const newRoomId = Math.floor(1000 + Math.random() * 9000).toString();
     const updates = {};
-    updates[`rooms/${newRoomId}/info`] = { hostId: user.uid, status: 'waiting' };
+    updates[`rooms/${newRoomId}/info`] = { 
+      hostId: user.uid, 
+      status: 'waiting',
+      gameMode: gameMode,
+      rules: rules,
+      createdAt: serverTimestamp()
+    };
     updates[`rooms/${newRoomId}/players/${user.uid}`] = { uid: user.uid, name: user.displayName, avatar: user.photoURL, joinedAt: serverTimestamp() };
     updates[`users/${user.uid}/currentRoom`] = newRoomId;
     update(ref(database), updates).then(() => { setRoomId(newRoomId); setView('room'); });
@@ -169,6 +176,14 @@ export default function GamePlatform() {
   const handleJoinRoom = async (joinInput) => {
     const roomSnap = await get(ref(database, `rooms/${joinInput}`));
     if (!roomSnap.exists()) return alert("找不到房間！");
+    
+    // 檢查房間人數上限
+    const roomInfo = roomSnap.val().info;
+    const currentPlayersCount = Object.keys(roomSnap.val().players || {}).length;
+    if (roomInfo?.rules?.maxPlayers && currentPlayersCount >= roomInfo.rules.maxPlayers) {
+      return alert(`房間已滿！上限為 ${roomInfo.rules.maxPlayers} 人。`);
+    }
+
     const updates = {};
     updates[`rooms/${joinInput}/players/${user.uid}`] = { uid: user.uid, name: user.displayName, avatar: user.photoURL, joinedAt: serverTimestamp() };
     updates[`users/${user.uid}/currentRoom`] = joinInput;
@@ -241,7 +256,6 @@ export default function GamePlatform() {
           />
         )}
 
-        {/* 💡 修改這裡：同時支援 playing 與 finished 狀態 */}
         {view === 'room' && ['playing', 'finished'].includes(roomData?.info?.status) && (
           <BoomCat 
             user={user} roomId={roomId} roomData={roomData} 
