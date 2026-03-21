@@ -11,18 +11,18 @@ export default function Lobby({
 }) {
   const [joinInput, setJoinInput] = useState('');
   
-  // 🚪 創建包廂 Modal 狀態
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createStep, setCreateStep] = useState(1); 
-  const [selectedGame, setSelectedGame] = useState('boomcat'); // 'boomcat' | 'drawguess'
+  const [selectedGame, setSelectedGame] = useState('boomcat'); // 'boomcat' | 'drawguess' | 'bingo'
   
-  // ⚙️ 統一管理的房間規則狀態
+  // ⚙️ 統一管理的房間規則
   const [roomRules, setRoomRules] = useState({
     maxPlayers: 5,
-    fastMode: false,        // 炸彈貓專用
-    drawRounds: 2,          // 你畫我猜專用：回合數
-    drawTime: 60,           // 你畫我猜專用：秒數
-    wordMode: 'system'      // 你畫我猜專用：詞彙模式 ('system', 'custom', 'drawer')
+    fastMode: false,        
+    drawRounds: 2,          
+    drawTime: 60,           
+    wordMode: 'system',     
+    winLines: 3             // 🎱 賓果專用：勝利需要幾條線
   });
 
   const onJoin = (e) => {
@@ -39,7 +39,6 @@ export default function Lobby({
 
   return (
     <div className="min-h-screen flex flex-col p-6 md:p-12 relative z-10 text-white">
-      {/* 頂部導航 */}
       <div className="w-full max-w-6xl mx-auto flex justify-between items-center mb-12 px-4">
         <h1 className="font-semibold text-xl tracking-tight">GAME BAR</h1>
         <div className="flex items-center gap-3 bg-white/[0.03] backdrop-blur-xl border border-white/10 p-2 pr-6 rounded-full shadow-lg">
@@ -64,7 +63,6 @@ export default function Lobby({
         </div>
       </div>
       
-      {/* 操作區 */}
       <div className="w-full max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
         <button onClick={() => { setShowCreateModal(true); setCreateStep(1); }} className="group bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-12 text-left hover:bg-white/[0.04] transition-all duration-500 overflow-hidden relative">
           <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 group-hover:bg-white/10 transition-colors"></div>
@@ -84,7 +82,6 @@ export default function Lobby({
         </div>
       </div>
 
-      {/* 排行榜 */}
       <div className="w-full max-w-6xl mx-auto bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-10 mt-4 relative overflow-hidden">
         <div className="absolute -top-32 -right-32 w-96 h-96 bg-yellow-500/10 blur-[100px] rounded-full mix-blend-screen pointer-events-none"></div>
         <div className="flex items-center justify-between mb-8 relative z-10">
@@ -120,10 +117,9 @@ export default function Lobby({
         </div>
       </div>
 
-      {/* 🚀 創建房間專屬 Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-          <div className="w-full max-w-2xl bg-[#120726]/95 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.8)] rounded-[3.5rem] p-8 md:p-12 relative overflow-hidden animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
+          <div className="w-full max-w-3xl bg-[#120726]/95 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.8)] rounded-[3.5rem] p-8 md:p-12 relative overflow-hidden animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
             
             <div className="absolute -top-20 -left-20 w-64 h-64 bg-indigo-500/20 blur-[100px] rounded-full mix-blend-screen pointer-events-none"></div>
             
@@ -138,38 +134,33 @@ export default function Lobby({
               <button onClick={() => { setShowCreateModal(false); setCreateStep(1); }} className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-rose-500/20 hover:text-rose-400 hover:border-rose-500/50 transition-all text-lg">✕</button>
             </div>
 
-            {/* 中間滾動區塊 */}
             <div className="flex-1 overflow-y-auto scrollbar-hide relative z-10 pr-2">
-              {/* 步驟 1：選擇遊戲 */}
               {createStep === 1 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
-                  {/* 選項：炸彈貓 */}
-                  <div 
-                    onClick={() => setSelectedGame('boomcat')}
-                    className={`p-6 rounded-[2.5rem] border-2 cursor-pointer transition-all duration-300 flex flex-col items-center text-center ${selectedGame === 'boomcat' ? 'bg-indigo-600/20 border-indigo-400 shadow-[0_0_30px_rgba(99,102,241,0.3)] scale-105' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:scale-105'}`}
-                  >
-                    <div className="text-6xl drop-shadow-xl mb-4 mt-2">🐈‍⬛💣</div>
-                    <h3 className="text-xl font-bold text-white mb-2">炸彈貓咪</h3>
-                    <p className="text-xs text-white/50 leading-relaxed px-2">高心機派對卡牌遊戲。利用手牌陷害對手，活到最後的才是贏家。</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  {/* 炸彈貓 */}
+                  <div onClick={() => setSelectedGame('boomcat')} className={`p-6 rounded-[2.5rem] border-2 cursor-pointer transition-all duration-300 flex flex-col items-center text-center ${selectedGame === 'boomcat' ? 'bg-indigo-600/20 border-indigo-400 shadow-[0_0_30px_rgba(99,102,241,0.3)] scale-105' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:scale-105'}`}>
+                    <div className="text-5xl drop-shadow-xl mb-4 mt-2">🐈‍⬛💣</div>
+                    <h3 className="text-lg font-bold text-white mb-2">炸彈貓咪</h3>
+                    <p className="text-[10px] text-white/50 leading-relaxed px-1">高心機派對卡牌。利用手牌陷害對手活到最後。</p>
                   </div>
-
-                  {/* 🚀 新增選項：你畫我猜 */}
-                  <div 
-                    onClick={() => setSelectedGame('drawguess')}
-                    className={`p-6 rounded-[2.5rem] border-2 cursor-pointer transition-all duration-300 flex flex-col items-center text-center ${selectedGame === 'drawguess' ? 'bg-emerald-600/20 border-emerald-400 shadow-[0_0_30px_rgba(52,211,153,0.3)] scale-105' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:scale-105'}`}
-                  >
-                    <div className="text-6xl drop-shadow-xl mb-4 mt-2">🎨✏️</div>
-                    <h3 className="text-xl font-bold text-white mb-2">你畫我猜</h3>
-                    <p className="text-xs text-white/50 leading-relaxed px-2">靈魂畫手大考驗。考驗默契與畫技，歡樂破表的經典派對遊戲。</p>
+                  {/* 你畫我猜 */}
+                  <div onClick={() => setSelectedGame('drawguess')} className={`p-6 rounded-[2.5rem] border-2 cursor-pointer transition-all duration-300 flex flex-col items-center text-center ${selectedGame === 'drawguess' ? 'bg-emerald-600/20 border-emerald-400 shadow-[0_0_30px_rgba(52,211,153,0.3)] scale-105' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:scale-105'}`}>
+                    <div className="text-5xl drop-shadow-xl mb-4 mt-2">🎨✏️</div>
+                    <h3 className="text-lg font-bold text-white mb-2">你畫我猜</h3>
+                    <p className="text-[10px] text-white/50 leading-relaxed px-1">靈魂畫手大考驗。歡樂破表的經典派對遊戲。</p>
+                  </div>
+                  {/* 🎱 極速賓果 */}
+                  <div onClick={() => setSelectedGame('bingo')} className={`p-6 rounded-[2.5rem] border-2 cursor-pointer transition-all duration-300 flex flex-col items-center text-center ${selectedGame === 'bingo' ? 'bg-fuchsia-600/20 border-fuchsia-400 shadow-[0_0_30px_rgba(192,38,211,0.3)] scale-105' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:scale-105'}`}>
+                    <div className="text-5xl drop-shadow-xl mb-4 mt-2">🎱✨</div>
+                    <h3 className="text-lg font-bold text-white mb-2">極速賓果</h3>
+                    <p className="text-[10px] text-white/50 leading-relaxed px-1">5x5 隨機數字盤。全自動連線判定，比手氣也比心機。</p>
                   </div>
                 </div>
               )}
 
-              {/* 步驟 2：設定規則 (依據遊戲動態切換) */}
               {createStep === 2 && (
                 <div className="space-y-4 animate-in slide-in-from-right-4 duration-300 pb-4">
-                  
-                  {/* === 共用規則 === */}
+                  {/* 共用規則 */}
                   <div className="bg-white/5 border border-white/10 rounded-[2rem] p-5 flex justify-between items-center">
                     <div>
                       <h4 className="font-bold text-md">房間人數上限</h4>
@@ -182,7 +173,7 @@ export default function Lobby({
                     </div>
                   </div>
 
-                  {/* === 炸彈貓專屬規則 === */}
+                  {/* 炸彈貓專屬 */}
                   {selectedGame === 'boomcat' && (
                     <div className="bg-white/5 border border-white/10 rounded-[2rem] p-5 flex justify-between items-center cursor-pointer" onClick={() => setRoomRules({...roomRules, fastMode: !roomRules.fastMode})}>
                       <div>
@@ -195,14 +186,12 @@ export default function Lobby({
                     </div>
                   )}
 
-                  {/* === 🎨 你畫我猜專屬規則 === */}
+                  {/* 你畫我猜專屬 */}
                   {selectedGame === 'drawguess' && (
                     <>
-                      {/* 規則 1：回合數 */}
                       <div className="bg-white/5 border border-white/10 rounded-[2rem] p-5 flex justify-between items-center">
                         <div>
                           <h4 className="font-bold text-md">遊戲回合數</h4>
-                          <p className="text-[11px] text-white/40 mt-1">所有人畫過一遍視為 1 回合</p>
                         </div>
                         <div className="flex items-center gap-3 bg-black/40 rounded-full p-1 border border-white/5">
                           <button onClick={() => setRoomRules({...roomRules, drawRounds: Math.max(1, roomRules.drawRounds - 1)})} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 font-bold">-</button>
@@ -210,12 +199,9 @@ export default function Lobby({
                           <button onClick={() => setRoomRules({...roomRules, drawRounds: Math.min(5, roomRules.drawRounds + 1)})} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 font-bold">+</button>
                         </div>
                       </div>
-
-                      {/* 規則 2：繪畫秒數 */}
                       <div className="bg-white/5 border border-white/10 rounded-[2rem] p-5 flex justify-between items-center">
                         <div>
-                          <h4 className="font-bold text-md">繪畫與猜題時間</h4>
-                          <p className="text-[11px] text-white/40 mt-1">每位玩家作畫的倒數秒數</p>
+                          <h4 className="font-bold text-md">繪畫時間</h4>
                         </div>
                         <div className="flex items-center gap-3 bg-black/40 rounded-full p-1 border border-white/5">
                           <button onClick={() => setRoomRules({...roomRules, drawTime: Math.max(30, roomRules.drawTime - 30)})} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 font-bold">-</button>
@@ -223,41 +209,27 @@ export default function Lobby({
                           <button onClick={() => setRoomRules({...roomRules, drawTime: Math.min(180, roomRules.drawTime + 30)})} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 font-bold">+</button>
                         </div>
                       </div>
-
-                      {/* 規則 3：詞彙題庫 (三個 Pill 按鈕) */}
-                      <div className="bg-white/5 border border-white/10 rounded-[2rem] p-5">
-                        <div className="mb-3">
-                          <h4 className="font-bold text-md">詞彙題庫模式</h4>
-                          <p className="text-[11px] text-white/40 mt-1">決定每一局要畫什麼題目的方式</p>
-                        </div>
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <button 
-                            onClick={() => setRoomRules({...roomRules, wordMode: 'system'})}
-                            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all border ${roomRules.wordMode === 'system' ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.2)]' : 'bg-black/30 border-white/10 text-white/50 hover:bg-white/5'}`}
-                          >
-                            🤖 系統預設
-                          </button>
-                          <button 
-                            onClick={() => setRoomRules({...roomRules, wordMode: 'custom'})}
-                            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all border ${roomRules.wordMode === 'custom' ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.2)]' : 'bg-black/30 border-white/10 text-white/50 hover:bg-white/5'}`}
-                          >
-                            👑 房主設定
-                          </button>
-                          <button 
-                            onClick={() => setRoomRules({...roomRules, wordMode: 'drawer'})}
-                            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all border ${roomRules.wordMode === 'drawer' ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.2)]' : 'bg-black/30 border-white/10 text-white/50 hover:bg-white/5'}`}
-                          >
-                            🎨 繪畫者決定
-                          </button>
-                        </div>
-                      </div>
                     </>
+                  )}
+
+                  {/* 🎱 賓果專屬規則 */}
+                  {selectedGame === 'bingo' && (
+                    <div className="bg-white/5 border border-white/10 rounded-[2rem] p-5 flex justify-between items-center">
+                      <div>
+                        <h4 className="font-bold text-md text-fuchsia-400">勝利連線數</h4>
+                        <p className="text-[11px] text-white/40 mt-1">最快達成指定連線數者獲勝</p>
+                      </div>
+                      <div className="flex items-center gap-3 bg-black/40 rounded-full p-1 border border-white/5">
+                        <button onClick={() => setRoomRules({...roomRules, winLines: Math.max(1, roomRules.winLines - 1)})} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 font-bold">-</button>
+                        <span className="font-mono font-bold text-lg w-4 text-center">{roomRules.winLines}</span>
+                        <button onClick={() => setRoomRules({...roomRules, winLines: Math.min(5, roomRules.winLines + 1)})} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 font-bold">+</button>
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Modal 底部按鈕區 */}
             <div className="flex gap-4 relative z-10 flex-shrink-0 pt-4 mt-2 border-t border-white/10">
               {createStep === 2 && (
                 <button onClick={() => setCreateStep(1)} className="px-8 py-5 rounded-[2rem] bg-white/5 border border-white/10 font-bold hover:bg-white/10 transition-colors">
