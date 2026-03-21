@@ -1,38 +1,37 @@
 'use client';
+
 import { ref, update } from 'firebase/database';
 import { database } from '../lib/firebaseConfig';
 
 export default function TicTacToe({ roomId, gameState, currentUser }) {
+  // 🛡️ 第一層防護：確保資料存在才開始渲染
+  if (!gameState || !gameState.board) {
+    return <div className="text-white text-center p-10">遊戲資料同步中...</div>;
+  }
+
   const { board, currentTurn, winner, symbols } = gameState;
 
-  // 勝負判定邏輯
-  const checkWinner = (squares) => {
-    const lines = [
-      [0, 1, 2], [3, 4, 5], [6, 7, 8], // 橫
-      [0, 3, 6], [1, 4, 7], [2, 5, 8], // 直
-      [0, 4, 8], [2, 4, 6]             // 斜
-    ];
-    for (let i = 0; i < lines.length; i++) {
-      const [a, b, c] = lines[i];
-      if (squares[a] && squares[a] === squares[b] && squares[a] === squares[c]) {
-        return squares[a];
-      }
-    }
-    return null;
-  };
-
   const handleMove = (index) => {
+    // 檢查：是否輪到我、格子是否為空、是否已有勝者
     if (currentTurn !== currentUser.uid || board[index] || winner) return;
 
     const newBoard = [...board];
     newBoard[index] = symbols[currentUser.uid];
-    const gameWinner = checkWinner(newBoard);
-    const isDraw = !gameWinner && newBoard.every(s => s !== null);
+    
+    // 勝負判定
+    const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    let gameWinner = null;
+    for (let [a,b,c] of lines) {
+      if (newBoard[a] && newBoard[a] === newBoard[b] && newBoard[a] === newBoard[c]) {
+        gameWinner = newBoard[a];
+      }
+    }
+    const isDraw = !gameWinner && newBoard.every(cell => cell !== null);
 
-    // 切換玩家
-    const playerIds = Object.keys(symbols);
+    const playerIds = Object.keys(symbols || {});
     const nextTurn = playerIds.find(id => id !== currentUser.uid);
 
+    // 更新 Firebase
     update(ref(database, `rooms/${roomId}/gameState`), {
       board: newBoard,
       currentTurn: (gameWinner || isDraw) ? null : nextTurn,
@@ -41,22 +40,20 @@ export default function TicTacToe({ roomId, gameState, currentUser }) {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
-      <div className="mb-6 text-xl font-semibold text-indigo-300">
+    <div className="flex flex-col items-center animate-in fade-in duration-500">
+      <div className="text-2xl font-bold mb-8 text-indigo-400">
         {winner ? (winner === 'draw' ? '平手！' : `勝利者: ${winner}`) : 
-         (currentTurn === currentUser.uid ? '🌟 輪到你了！' : '等待對手下棋...')}
+         (currentTurn === currentUser.uid ? "🌟 輪到你了" : "💤 對手思考中")}
       </div>
       
-      {/* 3x3 棋盤 */}
-      <div className="grid grid-cols-3 gap-4 p-4 bg-white/5 backdrop-blur-md rounded-[3rem] border border-white/10">
+      <div className="grid grid-cols-3 gap-4 bg-white/5 p-6 rounded-[3rem] border border-white/10 backdrop-blur-xl">
         {board.map((cell, i) => (
-          <button
-            key={i}
-            onClick={() => handleMove(i)}
-            className="w-24 h-24 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/5 text-4xl font-light transition-all flex items-center justify-center"
+          <button 
+            key={i} onClick={() => handleMove(i)}
+            className="w-20 h-20 md:w-24 md:h-24 bg-white/5 rounded-3xl text-4xl border border-white/5 hover:bg-white/10 transition-all flex items-center justify-center"
           >
-            {cell === 'O' && <span className="text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]">○</span>}
-            {cell === 'X' && <span className="text-rose-400 drop-shadow-[0_0_8px_rgba(251,113,133,0.5)]">×</span>}
+            {cell === 'O' && <span className="text-cyan-400">○</span>}
+            {cell === 'X' && <span className="text-rose-400">×</span>}
           </button>
         ))}
       </div>
@@ -64,7 +61,7 @@ export default function TicTacToe({ roomId, gameState, currentUser }) {
       {winner && (
         <button 
           onClick={() => update(ref(database, `rooms/${roomId}/info`), { status: 'waiting' })}
-          className="mt-8 px-8 py-3 bg-white/10 hover:bg-white/20 rounded-[3rem] border border-white/20 transition-all"
+          className="mt-8 px-10 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-full font-bold shadow-lg transition-all"
         >
           回到大廳
         </button>
