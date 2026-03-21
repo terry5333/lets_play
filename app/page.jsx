@@ -120,11 +120,9 @@ export default function GamePlatform() {
     }
   };
 
-  // 💡 提取並升級 Google 高清頭像的小魔術
   const extractAndUpgradeGoogleAvatar = async (currentUser) => {
     const googleData = currentUser.providerData.find(p => p.providerId === 'google.com');
     if (googleData && googleData.photoURL) {
-      // 將預設的 s96-c (96px) 強制替換成 s400-c (400px 高清畫質)
       const hdPhoto = googleData.photoURL.replace('=s96-c', '=s400-c');
       if (currentUser.photoURL !== hdPhoto) {
         await updateProfile(currentUser, { photoURL: hdPhoto });
@@ -234,6 +232,9 @@ export default function GamePlatform() {
     });
     setChatInput('');
   };
+
+  // 💡 補回的關鍵變數！
+  const isHost = roomData?.info?.hostId === user?.uid;
 
   // ==========================================
   // 2. UI 渲染保持極致美學
