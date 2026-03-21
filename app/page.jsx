@@ -8,7 +8,7 @@ import {
   onAuthStateChanged,
   signOut,
   updateProfile,
-  linkWithPopup // 💡 新增綁定功能
+  linkWithPopup
 } from 'firebase/auth';
 import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove, get } from 'firebase/database';
 import { auth, database, googleProvider } from '../lib/firebaseConfig';
@@ -17,20 +17,18 @@ export default function GamePlatform() {
   const [user, setUser] = useState(null);
   const [view, setView] = useState('loading'); 
   
-  // 表單狀態
-  const [username, setUsername] = useState(''); // 💡 改為純帳號
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [nickname, setNickname] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [joinInput, setJoinInput] = useState('');
   
-  // 房間狀態
   const [roomId, setRoomId] = useState('');
   const [roomData, setRoomData] = useState(null);
   const [chatInput, setChatInput] = useState('');
 
   // ==========================================
-  // 1. 生命週期與「單一房間」防護鎖
+  // 1. 生命週期與邏輯 (完全保留你的完美 UX)
   // ==========================================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -85,17 +83,11 @@ export default function GamePlatform() {
     }
   }, [view, roomId, user]);
 
-  // ==========================================
-  // 2. 登入與帳號綁定邏輯
-  // ==========================================
   const handleAuth = async (e) => {
     e.preventDefault();
-    
-    // 🛡️ 檢查帳號格式：只允許英數字
     const isValidUsername = /^[a-zA-Z0-9]+$/.test(username);
     if (!isValidUsername) return alert("帳號只能包含英文和數字！");
 
-    // 🪄 魔術：自動加上假網域騙過 Firebase
     const fakeEmail = `${username.toLowerCase()}@gamebar.local`;
 
     try {
@@ -118,27 +110,19 @@ export default function GamePlatform() {
     catch (err) { alert("Google 登入失敗: " + err.message); }
   };
 
-  // 💡 綁定 Google 帳號邏輯
   const handleLinkGoogle = async () => {
     try {
       const result = await linkWithPopup(auth.currentUser, googleProvider);
-      setUser({ ...result.user }); // 更新畫面狀態
-      alert("✅ 成功綁定 Google 帳號！下次可以直接用 Google 登入。");
+      setUser({ ...result.user }); 
+      alert("✅ 成功綁定 Google 帳號！");
     } catch (err) {
-      if (err.code === 'auth/credential-already-in-use') {
-        alert("這個 Google 帳號已經被綁定到其他遊戲帳號了！");
-      } else {
-        alert("綁定失敗: " + err.message);
-      }
+      if (err.code === 'auth/credential-already-in-use') alert("這個 Google 帳號已經被綁定到其他遊戲帳號了！");
+      else alert("綁定失敗: " + err.message);
     }
   };
 
-  // 判斷當前帳號是否已經綁定 Google
   const isGoogleLinked = user?.providerData?.some(p => p.providerId === 'google.com');
 
-  // ==========================================
-  // 3. 房間操作邏輯
-  // ==========================================
   const handleCreateRoom = () => {
     const newRoomId = Math.floor(1000 + Math.random() * 9000).toString();
     const updates = {};
@@ -194,91 +178,107 @@ export default function GamePlatform() {
   };
 
   // ==========================================
-  // 4. UI 渲染 (極簡純黑美學)
+  // 2. 空間運算風 UI (Ultra Glassmorphism + 3rem)
   // ==========================================
 
-  if (view === 'loading') return (
-    <div className="min-h-screen bg-black flex items-center justify-center text-white/50 tracking-[0.5em] text-sm">
-      系統連線中
+  // 共用的動態光暈背景組件
+  const AmbientBackground = () => (
+    <div className="fixed inset-0 overflow-hidden pointer-events-none z-0 bg-[#070709]">
+      <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-indigo-600/10 blur-[120px] rounded-full mix-blend-screen animate-pulse duration-[10s]"></div>
+      <div className="absolute top-[40%] -right-[10%] w-[50%] h-[50%] bg-cyan-600/10 blur-[120px] rounded-full mix-blend-screen"></div>
+      <div className="absolute -bottom-[20%] left-[20%] w-[40%] h-[40%] bg-purple-600/10 blur-[100px] rounded-full mix-blend-screen"></div>
     </div>
   );
 
-  // --- 登入頁 ---
+  if (view === 'loading') return (
+    <div className="min-h-screen flex items-center justify-center text-white/50 tracking-[0.5em] text-sm relative">
+      <AmbientBackground />
+      <div className="relative z-10 animate-pulse font-light text-white/70">SYNCING VIBE...</div>
+    </div>
+  );
+
   if (view === 'login') return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-6 text-white font-sans">
-      <div className="w-full max-w-md bg-[#111111]/80 border border-white/10 backdrop-blur-3xl rounded-[3rem] p-12 shadow-2xl">
-        <h1 className="text-3xl font-bold tracking-tight mb-2 text-center">我的遊戲吧</h1>
-        <p className="text-white/40 text-xs tracking-widest uppercase mb-12 text-center">Gaming Lounge</p>
+    <div className="min-h-screen flex items-center justify-center p-6 text-white font-sans relative selection:bg-white/20">
+      <AmbientBackground />
+      
+      {/* 3rem 頂級玻璃卡片 */}
+      <div className="w-full max-w-md bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-[0_8px_40px_rgba(0,0,0,0.5)] rounded-[3rem] p-10 md:p-14 relative z-10">
+        <div className="text-center mb-10">
+          <div className="w-16 h-16 bg-white/[0.05] border border-white/10 rounded-3xl mx-auto mb-6 flex items-center justify-center text-2xl shadow-inner backdrop-blur-md">✨</div>
+          <h1 className="text-3xl font-semibold tracking-tight mb-2">My Game Bar</h1>
+          <p className="text-white/40 text-[10px] tracking-[0.3em] uppercase">Premium Lounge</p>
+        </div>
 
         <form onSubmit={handleAuth} className="space-y-4">
           {isRegister && (
-            <input type="text" placeholder="玩家暱稱 (顯示用)" value={nickname} onChange={e => setNickname(e.target.value)} required
-              className="w-full bg-black/40 border border-white/10 rounded-[3rem] py-5 px-6 outline-none focus:border-white/30 transition-all text-sm" />
+            <input type="text" placeholder="顯示暱稱" value={nickname} onChange={e => setNickname(e.target.value)} required
+              className="w-full bg-black/20 border border-white/10 rounded-[2rem] py-5 px-6 outline-none focus:border-white/30 focus:bg-black/40 transition-all text-sm font-light placeholder:text-white/30" />
           )}
-          {/* 💡 改為一般 text input，提示只能輸入英數 */}
           <input type="text" placeholder="登入帳號 (純英數)" value={username} onChange={e => setUsername(e.target.value)} required
-            className="w-full bg-black/40 border border-white/10 rounded-[3rem] py-5 px-6 outline-none focus:border-white/30 transition-all text-sm" />
+            className="w-full bg-black/20 border border-white/10 rounded-[2rem] py-5 px-6 outline-none focus:border-white/30 focus:bg-black/40 transition-all text-sm font-light placeholder:text-white/30" />
           <input type="password" placeholder="登入密碼" value={password} onChange={e => setPassword(e.target.value)} required
-            className="w-full bg-black/40 border border-white/10 rounded-[3rem] py-5 px-6 outline-none focus:border-white/30 transition-all text-sm" />
+            className="w-full bg-black/20 border border-white/10 rounded-[2rem] py-5 px-6 outline-none focus:border-white/30 focus:bg-black/40 transition-all text-sm font-light placeholder:text-white/30" />
           
-          <button className="w-full py-5 bg-white text-black rounded-[3rem] font-bold hover:bg-white/90 transition-all active:scale-95 text-sm mt-4">
-            {isRegister ? '註冊帳號' : '登入系統'}
+          <button className="w-full py-5 bg-white text-black rounded-[2rem] font-semibold hover:scale-[0.98] transition-transform shadow-[0_0_20px_rgba(255,255,255,0.15)] text-sm mt-6">
+            {isRegister ? '註冊通行證' : '登入系統'}
           </button>
         </form>
 
-        <div className="flex items-center my-8 gap-4">
-          <div className="flex-1 h-[1px] bg-white/10"></div>
-          <span className="text-[10px] text-white/30 uppercase tracking-[0.2em]">OR</span>
-          <div className="flex-1 h-[1px] bg-white/10"></div>
+        <div className="flex items-center my-8 gap-4 opacity-50">
+          <div className="flex-1 h-[1px] bg-gradient-to-r from-transparent to-white/20"></div>
+          <span className="text-[10px] uppercase tracking-[0.2em] font-medium">OR</span>
+          <div className="flex-1 h-[1px] bg-gradient-to-l from-transparent to-white/20"></div>
         </div>
 
-        <button onClick={handleGoogleLogin} className="w-full py-5 bg-white/10 hover:bg-white/20 rounded-[3rem] transition-all flex items-center justify-center gap-3 text-sm font-bold border border-white/5">
-          使用 Google 登入
+        <button onClick={handleGoogleLogin} className="w-full py-5 bg-white/[0.03] hover:bg-white/[0.08] border border-white/10 rounded-[2rem] transition-all flex items-center justify-center gap-3 text-sm font-medium shadow-inner">
+          <svg className="w-4 h-4 opacity-80" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+          Google 快速登入
         </button>
 
-        <p className="mt-8 text-center text-xs text-white/40">
-          {isRegister ? '已經有帳號？' : '沒有帳號？'}
-          <button onClick={() => setIsRegister(!isRegister)} type="button" className="ml-2 text-white font-bold hover:underline">
-            {isRegister ? '登入' : '註冊'}
+        <p className="mt-8 text-center text-[11px] text-white/40 font-light">
+          {isRegister ? '已有通行證？' : '首次抵達？'}
+          <button onClick={() => setIsRegister(!isRegister)} type="button" className="ml-2 text-white font-medium hover:text-white/70 transition-colors">
+            {isRegister ? '切換登入' : '申請註冊'}
           </button>
         </p>
       </div>
     </div>
   );
 
-  // --- 大廳頁 ---
   if (view === 'lobby') return (
-    <div className="min-h-screen bg-black flex flex-col p-6 md:p-12 text-white font-sans">
-      <div className="w-full max-w-5xl mx-auto flex justify-between items-center mb-16">
-        <h1 className="font-bold text-xl tracking-tight">GAME BAR</h1>
-        <div className="flex items-center gap-6">
-          <span className="text-sm text-white/50">{user?.displayName || '無名氏'}</span>
+    <div className="min-h-screen flex flex-col p-6 md:p-12 text-white font-sans relative">
+      <AmbientBackground />
+      
+      <div className="w-full max-w-6xl mx-auto flex justify-between items-center mb-12 relative z-10 px-4">
+        <h1 className="font-semibold text-xl tracking-tight">GAME BAR</h1>
+        <div className="flex items-center gap-4 bg-white/[0.03] backdrop-blur-xl border border-white/10 px-6 py-3 rounded-full shadow-lg">
+          <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></div>
+          <span className="text-sm font-medium opacity-90 pr-4 border-r border-white/10">{user?.displayName || '無名氏'}</span>
           
-          {/* 💡 綁定 Google 按鈕 (如果還沒綁定的話) */}
           {!isGoogleLinked && (
-            <button onClick={handleLinkGoogle} className="text-xs px-4 py-2 bg-white/10 hover:bg-white/20 rounded-full font-bold transition-colors">
+            <button onClick={handleLinkGoogle} className="text-xs font-medium text-white/60 hover:text-white transition-colors pl-2">
               綁定 Google
             </button>
           )}
-
-          <button onClick={() => signOut(auth)} className="text-xs text-white hover:text-white/70 font-bold transition-colors">登出</button>
+          <button onClick={() => signOut(auth)} className="text-xs font-medium text-white/60 hover:text-white transition-colors pl-4">登出</button>
         </div>
       </div>
       
-      <div className="w-full max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
-        <button onClick={handleCreateRoom} className="group bg-[#111111]/80 border border-white/10 backdrop-blur-3xl rounded-[3rem] p-12 text-left hover:bg-white/5 transition-all">
-          <h2 className="text-3xl font-bold mb-4 tracking-tight">建立房間</h2>
-          <p className="text-white/40 text-sm leading-relaxed">開啟一個全新的專屬遊戲包廂。</p>
+      <div className="w-full max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
+        <button onClick={handleCreateRoom} className="group bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-12 text-left hover:bg-white/[0.04] transition-all duration-500 overflow-hidden relative">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 group-hover:bg-white/10 transition-colors"></div>
+          <h2 className="text-4xl font-semibold mb-4 tracking-tight relative z-10">開創包廂</h2>
+          <p className="text-white/40 text-sm leading-relaxed font-light relative z-10 max-w-sm">建立一個全新的專屬私密空間，邀請朋友一同加入連線。</p>
         </button>
 
-        <div className="bg-[#111111]/80 border border-white/10 backdrop-blur-3xl rounded-[3rem] p-12 flex flex-col justify-center">
-          <h2 className="text-3xl font-bold mb-8 tracking-tight">加入房間</h2>
-          <form onSubmit={handleJoinRoom} className="space-y-4">
+        <div className="bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-12 flex flex-col justify-center relative">
+          <h2 className="text-4xl font-semibold mb-8 tracking-tight">加入連線</h2>
+          <form onSubmit={handleJoinRoom} className="space-y-4 relative z-10">
             <input 
-              type="text" placeholder="輸入房號" value={joinInput} onChange={e => setJoinInput(e.target.value)}
-              className="w-full bg-black/40 border border-white/10 rounded-[3rem] py-6 px-6 outline-none focus:border-white/30 text-center font-mono text-xl tracking-[0.2em] placeholder:tracking-normal placeholder:text-sm"
+              type="text" placeholder="輸入 4 位數房號" value={joinInput} onChange={e => setJoinInput(e.target.value)}
+              className="w-full bg-black/20 border border-white/10 rounded-[2rem] py-6 px-6 outline-none focus:border-white/30 focus:bg-black/40 text-center font-mono text-2xl tracking-[0.3em] placeholder:tracking-normal placeholder:text-sm placeholder:font-sans font-light transition-all"
             />
-            <button className="w-full py-6 bg-white text-black rounded-[3rem] font-bold hover:bg-white/90 transition-all active:scale-95 text-sm">
+            <button className="w-full py-6 bg-white text-black rounded-[2rem] font-semibold hover:scale-[0.98] transition-transform shadow-[0_0_20px_rgba(255,255,255,0.15)] text-sm">
               進入
             </button>
           </form>
@@ -287,35 +287,40 @@ export default function GamePlatform() {
     </div>
   );
 
-  // --- 房間頁 ---
   const isHost = roomData?.info?.hostId === user?.uid;
 
   return (
-    <div className="min-h-screen bg-black text-white p-4 md:p-10 font-sans">
-      <div className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-8">
+    <div className="min-h-screen text-white p-4 md:p-10 font-sans relative">
+      <AmbientBackground />
+
+      <div className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-8 relative z-10 h-full">
         
-        <div className="flex-1 bg-[#111111]/80 border border-white/10 backdrop-blur-3xl rounded-[3rem] p-10">
+        {/* 左側：玩家名單 (精緻卡片) */}
+        <div className="flex-1 bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-10 flex flex-col">
           <div className="flex justify-between items-center mb-12">
             <div>
-              <h2 className="text-3xl font-bold tracking-tight mb-1">房間 {roomId}</h2>
-              <p className="text-white/40 text-xs tracking-widest uppercase">Room Lounge</p>
+              <h2 className="text-3xl font-semibold tracking-tight mb-1">Room {roomId}</h2>
+              <p className="text-white/30 text-[10px] tracking-widest uppercase font-medium">Lounge Area</p>
             </div>
-            <button onClick={handleLeaveRoom} className="px-6 py-3 bg-white/10 hover:bg-white/20 rounded-[3rem] text-xs font-bold transition-all">
+            <button onClick={handleLeaveRoom} className="px-6 py-3 bg-white/[0.05] border border-white/10 hover:bg-white/[0.1] rounded-[2rem] text-xs font-medium transition-all shadow-inner">
               離開房間
             </button>
           </div>
 
-          <div className="grid gap-3">
+          <div className="grid gap-4 flex-1 overflow-y-auto pr-2">
             {roomData?.players && Object.values(roomData.players).map(p => (
-              <div key={p.uid} className="flex justify-between items-center p-6 bg-black/40 rounded-[2.5rem] border border-white/5">
-                <div className="flex items-center gap-4">
+              <div key={p.uid} className="flex justify-between items-center p-6 bg-black/20 rounded-[2rem] border border-white/[0.05] backdrop-blur-sm">
+                <div className="flex items-center gap-5">
+                  <div className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center shadow-inner">
+                    <span className="text-white/50 text-sm font-medium">{p.name?.[0]}</span>
+                  </div>
                   <div>
-                    <span className="text-base font-bold block">{p.name}</span>
-                    {p.uid === roomData?.info?.hostId && <span className="text-[10px] text-white/40 font-bold uppercase tracking-widest">房長</span>}
+                    <span className="text-base font-medium block">{p.name}</span>
+                    {p.uid === roomData?.info?.hostId && <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">Host</span>}
                   </div>
                 </div>
                 {isHost && p.uid !== user?.uid && (
-                  <button onClick={() => handleKickPlayer(p.uid)} className="text-xs text-white/40 hover:text-white font-bold transition-colors">
+                  <button onClick={() => handleKickPlayer(p.uid)} className="text-[11px] text-white/30 hover:text-white font-medium transition-colors border border-white/10 px-4 py-2 rounded-full hover:bg-white/5">
                     踢除
                   </button>
                 )}
@@ -324,29 +329,30 @@ export default function GamePlatform() {
           </div>
         </div>
 
-        <div className="w-full lg:w-[400px] bg-[#111111]/80 border border-white/10 backdrop-blur-3xl rounded-[3rem] p-8 flex flex-col h-[700px]">
-          <h3 className="text-sm font-bold mb-8 text-white/40 tracking-widest uppercase">對話紀錄</h3>
-          <div className="flex-1 overflow-y-auto space-y-4 mb-6 pr-2 scrollbar-hide">
+        {/* 右側：聊天室 (極簡泡泡) */}
+        <div className="w-full lg:w-[420px] bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-8 flex flex-col h-[750px]">
+          <h3 className="text-[11px] font-medium mb-8 text-white/40 tracking-widest uppercase">Live Chat</h3>
+          <div className="flex-1 overflow-y-auto space-y-6 mb-6 pr-2 scrollbar-hide">
             {roomData?.chat && Object.values(roomData.chat).sort((a,b) => a.timestamp - b.timestamp).map((m, i) => {
               const isMe = m.senderId === user?.uid;
               return (
                 <div key={i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                  {!isMe && <span className="text-[10px] text-white/30 ml-4 mb-1">{m.senderName}</span>}
-                  <div className={`px-5 py-3 rounded-[2rem] text-sm ${isMe ? 'bg-white text-black' : 'bg-black/40 border border-white/5'}`}>
+                  {!isMe && <span className="text-[10px] text-white/30 ml-4 mb-1.5 font-medium">{m.senderName}</span>}
+                  <div className={`px-6 py-4 rounded-[2rem] text-[13px] leading-relaxed tracking-wide ${isMe ? 'bg-white/10 backdrop-blur-md border border-white/10 text-white rounded-tr-none' : 'bg-black/20 border border-white/5 text-white/80 rounded-tl-none shadow-inner'}`}>
                     {m.text}
                   </div>
                 </div>
               );
             })}
           </div>
-          <form onSubmit={handleSendMessage} className="relative">
+          <form onSubmit={handleSendMessage} className="relative mt-auto">
             <input 
               value={chatInput} onChange={e => setChatInput(e.target.value)}
-              className="w-full bg-black/40 border border-white/10 rounded-[3rem] py-5 pl-6 pr-20 outline-none focus:border-white/30 placeholder:text-white/20 text-sm"
+              className="w-full bg-black/20 border border-white/10 rounded-[2rem] py-5 pl-6 pr-20 outline-none focus:border-white/30 focus:bg-black/30 placeholder:text-white/20 text-sm font-light transition-all shadow-inner"
               placeholder="輸入訊息..."
             />
-            <button className="absolute right-2 top-2 bottom-2 px-5 bg-white text-black rounded-[2.5rem] font-bold text-xs hover:bg-white/90 transition-all">
-              傳送
+            <button className="absolute right-2 top-2 bottom-2 px-5 bg-white text-black rounded-[1.5rem] font-medium text-[11px] hover:scale-95 transition-transform shadow-[0_0_15px_rgba(255,255,255,0.2)]">
+              Send
             </button>
           </form>
         </div>
