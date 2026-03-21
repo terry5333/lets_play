@@ -11,7 +11,7 @@ import {
 } from 'firebase/auth';
 import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove } from 'firebase/database';
 // 💡 注意：我們把 TicTacToe 拿掉了，專心處理系統邏輯，保證不報錯！
-import { auth, database, googleProvider } from '@/lib/firebaseConfig';
+import { auth, database, googleProvider } from '../lib/firebaseConfig';
 
 export default function GamePlatform() {
   // --- 系統狀態 ---
