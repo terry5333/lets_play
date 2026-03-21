@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ref, push, onValue, remove, update, increment, get } from 'firebase/database';
+import { ref, push, onValue, update, increment } from 'firebase/database';
 import { database } from '../lib/firebaseConfig';
+import { ReactSketchCanvas } from 'react-sketch-canvas'; // 🎨 載入神級 SVG 畫布
 
 const COLORS = [
   { name: '螢光白', hex: '#f8fafc' },
@@ -11,7 +12,7 @@ const COLORS = [
   { name: '電馭紫', hex: '#a855f7' },
   { name: '量子藍', hex: '#3b82f6' },
   { name: '矩陣綠', hex: '#10b981' },
-  { name: '暗物質(橡皮擦)', hex: '#000000' } 
+  { name: '橡皮擦', hex: 'eraser' } // 獨立標記
 ];
 
 const SYSTEM_WORDS = ['蘋果', '太空人', '皮卡丘', '電腦', '珍珠奶茶', '恐龍', '自由女神', '黑洞', '馬桶', '衛生紙', '長頸鹿', '麥克風', '蒙娜麗莎', '蜘蛛人', '火鍋', '吉他', '殭屍', '獨角獸', '魔法陣', '忍者'];
@@ -20,11 +21,11 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
   const [chatInput, setChatInput] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   
+  // 🎨 神級畫布狀態
   const canvasRef = useRef(null);
-  const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState(COLORS[0].hex);
   const [lineWidth, setLineWidth] = useState(4);
-  const currentLineRef = useRef([]); 
+  const [eraserMode, setEraserMode] = useState(false);
 
   const [timeLeft, setTimeLeft] = useState(0);
   const [customWord, setCustomWord] = useState(''); 
@@ -40,100 +41,36 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
   const currentWord = gameState.currentWord || '';
   const isDrawingState = gameState.status === 'drawing';
 
-  // 🖌️ 1. 監聽畫布資料
+  // 🖌️ 1. 監聽畫布路徑 (Paths) 資料
   useEffect(() => {
-    const linesRef = ref(database, `rooms/${roomId}/gameState/lines`);
-    const unsub = onValue(linesRef, (snapshot) => {
-      const lines = snapshot.val() ? Object.values(snapshot.val()) : [];
-      redrawCanvas(lines);
+    const pathsRef = ref(database, `rooms/${roomId}/gameState/paths`);
+    const unsub = onValue(pathsRef, (snapshot) => {
+      const paths = snapshot.val() || [];
+      // 只有猜題者才需要不斷載入遠端路徑；畫家自己畫就好，免得被 Firebase 迴音打斷
+      if (!isMyTurnToDraw) {
+        if (paths.length === 0) canvasRef.current?.clearCanvas();
+        else canvasRef.current?.loadPaths(paths);
+      } else {
+        // 如果畫家收到空陣列 (例如回合重置或點擊清空)，則強制清空
+        if (paths.length === 0) canvasRef.current?.clearCanvas();
+      }
     });
     return () => unsub();
-  }, [roomId]);
+  }, [roomId, isMyTurnToDraw]);
 
-  const redrawCanvas = (lines) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    lines.forEach(line => {
-      if (!line.points || line.points.length < 2) return;
-      ctx.beginPath();
-      ctx.strokeStyle = line.color;
-      ctx.lineWidth = line.color === '#000000' ? line.width * 4 : line.width; 
-      
-      const startX = line.points[0].x * canvas.width;
-      const startY = line.points[0].y * canvas.height;
-      ctx.moveTo(startX, startY);
-
-      for (let i = 1; i < line.points.length; i++) {
-        const x = line.points[i].x * canvas.width;
-        const y = line.points[i].y * canvas.height;
-        ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    });
-  };
-
-  const getCoordinates = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    const x = (clientX - rect.left) / rect.width;
-    const y = (clientY - rect.top) / rect.height;
-    return { x, y };
-  };
-
-  const startDrawing = (e) => {
-    if (!isMyTurnToDraw || !isDrawingState) return;
-    e.preventDefault(); 
-    setIsDrawing(true);
-    currentLineRef.current = [getCoordinates(e)];
-  };
-
-  const draw = (e) => {
-    if (!isDrawing || !isMyTurnToDraw || !isDrawingState) return;
-    e.preventDefault();
-    const coords = getCoordinates(e);
-    currentLineRef.current.push(coords);
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = color;
-    ctx.lineWidth = color === '#000000' ? lineWidth * 4 : lineWidth;
-
-    const prevCoords = currentLineRef.current[currentLineRef.current.length - 2];
-    ctx.beginPath();
-    ctx.moveTo(prevCoords.x * canvas.width, prevCoords.y * canvas.height);
-    ctx.lineTo(coords.x * canvas.width, coords.y * canvas.height);
-    ctx.stroke();
-  };
-
-  const stopDrawing = () => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
-    if (currentLineRef.current.length > 1) {
-      push(ref(database, `rooms/${roomId}/gameState/lines`), { color, width: lineWidth, points: currentLineRef.current });
+  // 🖌️ 2. 畫家筆跡改變時，自動推送到 Firebase
+  const handleStroke = (updatedPaths) => {
+    if (isMyTurnToDraw && isDrawingState) {
+      update(ref(database), { [`rooms/${roomId}/gameState/paths`]: updatedPaths });
     }
-    currentLineRef.current = [];
   };
 
   const clearCanvas = () => {
-    if (isMyTurnToDraw) remove(ref(database, `rooms/${roomId}/gameState/lines`));
-  };
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      canvas.width = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
+    if (isMyTurnToDraw) {
+      canvasRef.current?.clearCanvas();
+      update(ref(database), { [`rooms/${roomId}/gameState/paths`]: [] }); // 推送空陣列讓所有人清空
     }
-  }, [gameState.status]); 
+  };
 
   // ⏱️ 3. 計時器與狀態導播引擎
   useEffect(() => {
@@ -141,11 +78,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
       const interval = setInterval(() => {
         const remaining = Math.max(0, Math.floor((gameState.turnEndTime - Date.now()) / 1000));
         setTimeLeft(remaining);
-        
-        // 時間到自動結束回合
-        if (remaining === 0 && (isMyTurnToDraw || isHost)) {
-          endTurn();
-        }
+        if (remaining === 0 && (isMyTurnToDraw || isHost)) endTurn();
       }, 1000);
       return () => clearInterval(interval);
     }
@@ -163,16 +96,16 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     const players = Object.keys(roomData.players);
     if (players.length < 2) return alert("至少需要 2 人才能開始！");
     
-    const updates = {};
-    updates[`rooms/${roomId}/gameState`] = {
-      status: 'selecting',
-      currentDrawerIdx: 0,
-      currentRound: 1,
-      playerQueue: players.sort(() => 0.5 - Math.random()), 
-      scores: {},
-      lines: []
-    };
-    update(ref(database), updates);
+    update(ref(database), {
+      [`rooms/${roomId}/gameState`]: {
+        status: 'selecting',
+        currentDrawerIdx: 0,
+        currentRound: 1,
+        playerQueue: players.sort(() => 0.5 - Math.random()), 
+        scores: {},
+        paths: []
+      }
+    });
   };
 
   const submitWord = (word) => {
@@ -182,18 +115,16 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     updates[`rooms/${roomId}/gameState/currentWord`] = word.trim();
     updates[`rooms/${roomId}/gameState/turnEndTime`] = Date.now() + (rules.drawTime * 1000);
     updates[`rooms/${roomId}/gameState/correctGuesserIds`] = []; 
-    updates[`rooms/${roomId}/gameState/lines`] = null; 
+    updates[`rooms/${roomId}/gameState/paths`] = []; // 開局清空畫布
     
     update(ref(database), updates);
     push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🎨 ${user.displayName} 開始作畫了！大家快猜！`, timestamp: Date.now() });
   };
 
-  // ⚡ 統一結束回合函數 (支援傳入立即的額外更新)
   const endTurn = (extraUpdates = {}) => {
     extraUpdates[`rooms/${roomId}/gameState/status`] = 'turn_end';
     update(ref(database), extraUpdates);
     
-    // 提前計算下回合資訊
     let nextIdx = gameState.currentDrawerIdx + 1;
     let nextRound = gameState.currentRound;
     let nextStatus = 'selecting';
@@ -204,57 +135,46 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
       if (nextRound > rules.drawRounds) nextStatus = 'game_over';
     }
 
-    // 4 秒後自動切換狀態
     setTimeout(async () => {
       const snap = await get(ref(database, `rooms/${roomId}/gameState/status`));
-      // 防重複觸發：確保現在真的是 turn_end 才切換
       if (snap.val() === 'turn_end') {
         const nextUpdates = {};
         nextUpdates[`rooms/${roomId}/gameState/status`] = nextStatus;
         nextUpdates[`rooms/${roomId}/gameState/currentDrawerIdx`] = nextIdx;
         nextUpdates[`rooms/${roomId}/gameState/currentRound`] = nextRound;
-        nextUpdates[`rooms/${roomId}/gameState/lines`] = null;
+        nextUpdates[`rooms/${roomId}/gameState/paths`] = [];
         nextUpdates[`rooms/${roomId}/gameState/correctGuesserIds`] = [];
         update(ref(database), nextUpdates);
       }
     }, 4000);
   };
 
-  // 💬 5. 聊天與「秒殺搶答攔截」
+  // 💬 5. 聊天與秒殺搶答
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-
     const inputTxt = chatInput.trim();
     setChatInput('');
 
     if (gameState.status === 'drawing') {
       if (isMyTurnToDraw) {
-        if (inputTxt.includes(currentWord)) {
-          return alert("畫家不可以在聊天室暴雷答案喔！");
-        }
+        if (inputTxt.includes(currentWord)) return alert("畫家不可以在聊天室暴雷答案喔！");
       } else {
         const hasGuessed = gameState.correctGuesserIds?.includes(user.uid);
         if (!hasGuessed && inputTxt === currentWord) {
-          // 🟢 猜對了！
-          const basePoints = 10;
-          const timeBonus = Math.floor((timeLeft / rules.drawTime) * 20); 
-          const totalPoints = basePoints + timeBonus;
-
+          const totalPoints = 10 + Math.floor((timeLeft / rules.drawTime) * 20); 
           const updates = {};
           updates[`rooms/${roomId}/gameState/correctGuesserIds`] = [...(gameState.correctGuesserIds || []), user.uid];
-          updates[`rooms/${roomId}/gameState/scores/${user.uid}`] = increment(totalPoints); // 猜對加分
-          updates[`rooms/${roomId}/gameState/scores/${currentDrawerUid}`] = increment(15); // 畫家得高分獎勵
+          updates[`rooms/${roomId}/gameState/scores/${user.uid}`] = increment(totalPoints); 
+          updates[`rooms/${roomId}/gameState/scores/${currentDrawerUid}`] = increment(15); 
           
           push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🟢 搶答成功！${user.displayName} 猜對了，獲得 ${totalPoints} 分！`, timestamp: Date.now() });
 
-          // ⚡ 修改：只要有 1 個人猜對，回合瞬間結束！
           endTurn(updates);
           return; 
         }
       }
     }
-
     push(ref(database, `rooms/${roomId}/chat`), { senderId: user.uid, senderName: user.displayName, avatar: user.photoURL || '', text: inputTxt, timestamp: Date.now() });
   };
 
@@ -289,10 +209,8 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
         </div>
       </div>
 
-      {/* 🚀 畫布與聊天佈局 (加大畫布比例) */}
       <div className="flex-1 flex flex-col lg:flex-row gap-4 md:gap-6 p-2 md:p-6 pb-6 z-10 overflow-hidden relative w-full max-w-[1920px] mx-auto">
         
-        {/* 左側：主畫布區 (高度與寬度佔比加大) */}
         <div className="flex-[3] lg:flex-[4] xl:flex-[5] flex flex-col h-full gap-3 relative min-h-[55vh] md:min-h-[70vh]">
           
           {gameState.status === 'waiting' && (
@@ -369,7 +287,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             </div>
           )}
 
-          {/* 畫布本體 */}
+          {/* 🎨 神級 SVG 畫布 (React Sketch Canvas) */}
           <div className="flex-1 w-full bg-black/40 backdrop-blur-xl border border-white/10 rounded-[2rem] md:rounded-[2.5rem] shadow-[0_0_40px_rgba(0,0,0,0.5)] relative overflow-hidden group">
             {gameState.status === 'drawing' && (
               <div className="absolute top-4 md:top-6 left-0 right-0 flex justify-center pointer-events-none z-10">
@@ -384,15 +302,17 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
               </div>
             )}
 
-            <canvas
-              ref={canvasRef}
-              onPointerDown={startDrawing}
-              onPointerMove={draw}
-              onPointerUp={stopDrawing}
-              onPointerOut={stopDrawing}
-              style={{ touchAction: 'none' }}
-              className={`w-full h-full ${isMyTurnToDraw && isDrawingState ? (color === '#000000' ? 'cursor-cell' : 'cursor-crosshair') : 'cursor-default pointer-events-none'}`}
-            />
+            <div className={`w-full h-full ${!isMyTurnToDraw || !isDrawingState ? 'pointer-events-none' : ''}`}>
+              <ReactSketchCanvas
+                ref={canvasRef}
+                strokeWidth={lineWidth}
+                strokeColor={color}
+                eraserWidth={lineWidth * 3}
+                canvasColor="transparent"
+                onChange={handleStroke}
+                style={{ border: 'none', cursor: isMyTurnToDraw && isDrawingState ? (eraserMode ? 'cell' : 'crosshair') : 'default' }}
+              />
+            </div>
           </div>
 
           {/* 工具列 */}
@@ -400,11 +320,22 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             <div className="flex gap-2 overflow-x-auto scrollbar-hide pr-2">
               {COLORS.map(c => (
                 <button
-                  key={c.hex} onClick={() => setColor(c.hex)} title={c.name}
-                  className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 transition-all border-2 ${color === c.hex ? 'scale-110 shadow-[0_0_15px_currentColor]' : 'border-transparent hover:scale-105'}`}
-                  style={{ backgroundColor: c.hex === '#000000' ? '#262626' : c.hex, borderColor: color === c.hex ? '#fff' : 'transparent', color: c.hex }}
+                  key={c.hex} 
+                  onClick={() => {
+                    if (c.hex === 'eraser') {
+                      setEraserMode(true);
+                      canvasRef.current?.eraseMode(true);
+                    } else {
+                      setEraserMode(false);
+                      canvasRef.current?.eraseMode(false);
+                      setColor(c.hex);
+                    }
+                  }}
+                  title={c.name}
+                  className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 transition-all border-2 ${(!eraserMode && color === c.hex) || (eraserMode && c.hex === 'eraser') ? 'scale-110 shadow-[0_0_15px_currentColor]' : 'border-transparent hover:scale-105'}`}
+                  style={{ backgroundColor: c.hex === 'eraser' ? '#262626' : c.hex, borderColor: ((!eraserMode && color === c.hex) || (eraserMode && c.hex === 'eraser')) ? '#fff' : 'transparent', color: c.hex === 'eraser' ? '#fff' : c.hex }}
                 >
-                  {c.hex === '#000000' && <span className="text-white text-[9px] md:text-[10px] font-bold block mt-2 md:mt-2.5">橡皮</span>}
+                  {c.hex === 'eraser' && <span className="text-white text-[9px] md:text-[10px] font-bold block mt-2 md:mt-2.5">橡皮</span>}
                 </button>
               ))}
             </div>
@@ -422,7 +353,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
           </div>
         </div>
 
-        {/* 🚀 右側：玩家列表與聊天區 (佔比縮小) */}
+        {/* 右側：玩家列表與聊天區 */}
         <div className="w-full lg:w-[260px] xl:w-[320px] bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-[2rem] md:rounded-[2.5rem] flex flex-col overflow-hidden shadow-2xl h-[400px] lg:h-auto z-10 relative">
           
           <div className="p-3 md:p-4 border-b border-white/5 bg-black/20 flex gap-2 overflow-x-auto scrollbar-hide">
