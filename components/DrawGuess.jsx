@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ref, push, onValue, remove, update, increment } from 'firebase/database';
+import { ref, push, onValue, remove, update, increment, get } from 'firebase/database';
 import { database } from '../lib/firebaseConfig';
 
 const COLORS = [
@@ -14,24 +14,21 @@ const COLORS = [
   { name: '暗物質(橡皮擦)', hex: '#000000' } 
 ];
 
-// 🤖 系統內建隨機題庫
 const SYSTEM_WORDS = ['蘋果', '太空人', '皮卡丘', '電腦', '珍珠奶茶', '恐龍', '自由女神', '黑洞', '馬桶', '衛生紙', '長頸鹿', '麥克風', '蒙娜麗莎', '蜘蛛人', '火鍋', '吉他', '殭屍', '獨角獸', '魔法陣', '忍者'];
 
 export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
   const [chatInput, setChatInput] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   
-  // 🎨 畫布狀態
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState(COLORS[0].hex);
   const [lineWidth, setLineWidth] = useState(4);
   const currentLineRef = useRef([]); 
 
-  // ⏱️ 計時器狀態
   const [timeLeft, setTimeLeft] = useState(0);
-  const [customWord, setCustomWord] = useState(''); // 畫家自訂詞彙輸入框
-  const [systemWordChoices, setSystemWordChoices] = useState([]); // 系統隨機給的三個選項
+  const [customWord, setCustomWord] = useState(''); 
+  const [systemWordChoices, setSystemWordChoices] = useState([]); 
 
   const gameState = roomData?.gameState || { status: 'waiting' };
   const rules = roomData?.info?.rules || { drawRounds: 2, drawTime: 60, wordMode: 'system' };
@@ -80,7 +77,6 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     });
   };
 
-  // 🖌️ 2. 滑鼠/手指 操作 (只有畫家且在作畫狀態才能畫)
   const getCoordinates = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -137,7 +133,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
       canvas.width = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
     }
-  }, [gameState.status]); // 狀態切換時重新抓取寬高
+  }, [gameState.status]); 
 
   // ⏱️ 3. 計時器與狀態導播引擎
   useEffect(() => {
@@ -146,7 +142,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
         const remaining = Math.max(0, Math.floor((gameState.turnEndTime - Date.now()) / 1000));
         setTimeLeft(remaining);
         
-        // 時間到！由畫家或房長觸發結算 (避免多人重複觸發)
+        // 時間到自動結束回合
         if (remaining === 0 && (isMyTurnToDraw || isHost)) {
           endTurn();
         }
@@ -155,7 +151,6 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     }
   }, [gameState.status, gameState.turnEndTime, isMyTurnToDraw, isHost]);
 
-  // 生成系統選項 (只在進入 selecting 時產生一次)
   useEffect(() => {
     if (gameState.status === 'selecting' && isMyTurnToDraw) {
       const shuffled = [...SYSTEM_WORDS].sort(() => 0.5 - Math.random());
@@ -173,7 +168,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
       status: 'selecting',
       currentDrawerIdx: 0,
       currentRound: 1,
-      playerQueue: players.sort(() => 0.5 - Math.random()), // 隨機決定作畫順序
+      playerQueue: players.sort(() => 0.5 - Math.random()), 
       scores: {},
       lines: []
     };
@@ -186,39 +181,46 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     updates[`rooms/${roomId}/gameState/status`] = 'drawing';
     updates[`rooms/${roomId}/gameState/currentWord`] = word.trim();
     updates[`rooms/${roomId}/gameState/turnEndTime`] = Date.now() + (rules.drawTime * 1000);
-    updates[`rooms/${roomId}/gameState/correctGuesserIds`] = []; // 清空猜對名單
-    updates[`rooms/${roomId}/gameState/lines`] = null; // 清空畫布
+    updates[`rooms/${roomId}/gameState/correctGuesserIds`] = []; 
+    updates[`rooms/${roomId}/gameState/lines`] = null; 
     
     update(ref(database), updates);
     push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🎨 ${user.displayName} 開始作畫了！大家快猜！`, timestamp: Date.now() });
   };
 
-  const endTurn = () => {
-    update(ref(database, `rooms/${roomId}/gameState/status`), 'turn_end');
+  // ⚡ 統一結束回合函數 (支援傳入立即的額外更新)
+  const endTurn = (extraUpdates = {}) => {
+    extraUpdates[`rooms/${roomId}/gameState/status`] = 'turn_end';
+    update(ref(database), extraUpdates);
     
-    // 等待 5 秒後進入下一個人的選詞階段
-    setTimeout(() => {
-      const updates = {};
-      let nextIdx = gameState.currentDrawerIdx + 1;
-      let nextRound = gameState.currentRound;
-      let nextStatus = 'selecting';
+    // 提前計算下回合資訊
+    let nextIdx = gameState.currentDrawerIdx + 1;
+    let nextRound = gameState.currentRound;
+    let nextStatus = 'selecting';
 
-      // 檢查是否換回合
-      if (nextIdx >= alivePlayers.length) {
-        nextIdx = 0;
-        nextRound++;
-        if (nextRound > rules.drawRounds) nextStatus = 'game_over';
+    if (nextIdx >= alivePlayers.length) {
+      nextIdx = 0;
+      nextRound++;
+      if (nextRound > rules.drawRounds) nextStatus = 'game_over';
+    }
+
+    // 4 秒後自動切換狀態
+    setTimeout(async () => {
+      const snap = await get(ref(database, `rooms/${roomId}/gameState/status`));
+      // 防重複觸發：確保現在真的是 turn_end 才切換
+      if (snap.val() === 'turn_end') {
+        const nextUpdates = {};
+        nextUpdates[`rooms/${roomId}/gameState/status`] = nextStatus;
+        nextUpdates[`rooms/${roomId}/gameState/currentDrawerIdx`] = nextIdx;
+        nextUpdates[`rooms/${roomId}/gameState/currentRound`] = nextRound;
+        nextUpdates[`rooms/${roomId}/gameState/lines`] = null;
+        nextUpdates[`rooms/${roomId}/gameState/correctGuesserIds`] = [];
+        update(ref(database), nextUpdates);
       }
-
-      updates[`rooms/${roomId}/gameState/status`] = nextStatus;
-      updates[`rooms/${roomId}/gameState/currentDrawerIdx`] = nextIdx;
-      updates[`rooms/${roomId}/gameState/currentRound`] = nextRound;
-      updates[`rooms/${roomId}/gameState/lines`] = null;
-      update(ref(database), updates);
-    }, 5000);
+    }, 4000);
   };
 
-  // 💬 5. 聊天與「神級搶答攔截」
+  // 💬 5. 聊天與「秒殺搶答攔截」
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -226,74 +228,52 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     const inputTxt = chatInput.trim();
     setChatInput('');
 
-    // 攔截搶答邏輯
     if (gameState.status === 'drawing') {
       if (isMyTurnToDraw) {
-        // 畫家不能在作畫時說出答案的字
         if (inputTxt.includes(currentWord)) {
           return alert("畫家不可以在聊天室暴雷答案喔！");
         }
       } else {
-        // 猜題者邏輯
         const hasGuessed = gameState.correctGuesserIds?.includes(user.uid);
         if (!hasGuessed && inputTxt === currentWord) {
           // 🟢 猜對了！
           const basePoints = 10;
-          const timeBonus = Math.floor((timeLeft / rules.drawTime) * 20); // 越快猜對加越多分
+          const timeBonus = Math.floor((timeLeft / rules.drawTime) * 20); 
           const totalPoints = basePoints + timeBonus;
 
           const updates = {};
-          // 記錄已猜對
-          const newCorrectIds = [...(gameState.correctGuesserIds || []), user.uid];
-          updates[`rooms/${roomId}/gameState/correctGuesserIds`] = newCorrectIds;
+          updates[`rooms/${roomId}/gameState/correctGuesserIds`] = [...(gameState.correctGuesserIds || []), user.uid];
+          updates[`rooms/${roomId}/gameState/scores/${user.uid}`] = increment(totalPoints); // 猜對加分
+          updates[`rooms/${roomId}/gameState/scores/${currentDrawerUid}`] = increment(15); // 畫家得高分獎勵
           
-          // 加分 (猜對者)
-          updates[`rooms/${roomId}/gameState/scores/${user.uid}`] = increment(totalPoints);
-          
-          // 加分 (畫家：每有一個人猜對，畫家得 5 分)
-          updates[`rooms/${roomId}/gameState/scores/${currentDrawerUid}`] = increment(5);
-          
-          // 廣播系統訊息 (不顯示答案)
-          push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🟢 ${user.displayName} 猜對了！獲得 ${totalPoints} 分`, timestamp: Date.now() });
+          push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🟢 搶答成功！${user.displayName} 猜對了，獲得 ${totalPoints} 分！`, timestamp: Date.now() });
 
-          // 檢查是否所有人都猜對了 (提前結束)
-          if (newCorrectIds.length >= alivePlayers.length - 1 && (isMyTurnToDraw || isHost)) {
-            endTurn();
-          }
-          
-          update(ref(database), updates);
-          return; // 攔截原本的聊天訊息，不讓它印出來
+          // ⚡ 修改：只要有 1 個人猜對，回合瞬間結束！
+          endTurn(updates);
+          return; 
         }
       }
     }
 
-    // 正常發送聊天訊息
     push(ref(database, `rooms/${roomId}/chat`), { senderId: user.uid, senderName: user.displayName, avatar: user.photoURL || '', text: inputTxt, timestamp: Date.now() });
   };
 
-  // ==========================================
-  // UI 輔助渲染
-  // ==========================================
-  // 把答案變成 "O O O" 給猜題者看
   const hiddenWord = currentWord.replace(/./g, ' ◯ ');
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col vibe-font relative overflow-hidden selection:bg-emerald-500/20">
       
-      {/* 🌠 霓虹背景光暈 */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
         <div className="absolute top-[10%] left-[10%] w-[40%] h-[40%] bg-emerald-600/10 blur-[120px] rounded-full animate-pulse duration-[10s]"></div>
         <div className="absolute bottom-[10%] right-[10%] w-[40%] h-[40%] bg-cyan-600/10 blur-[100px] rounded-full animate-pulse duration-[8s]"></div>
       </div>
 
-      {/* 頂部狀態列 */}
-      <div className="flex justify-between items-center p-4 md:p-6 z-10 flex-shrink-0">
+      <div className="flex justify-between items-center p-3 md:p-5 z-10 flex-shrink-0">
         <button onClick={handleLeaveRoom} className="flex items-center bg-white/5 hover:bg-white/10 px-4 py-2 rounded-full backdrop-blur-md transition-colors border border-white/10 shadow-inner group">
           <span className="mr-2 text-xl font-black group-hover:-translate-x-1 transition-transform">←</span>
           <span className="font-mono font-bold tracking-wider text-sm">{roomId}</span>
         </button>
         
-        {/* 狀態指示器 */}
         <div className="bg-gradient-to-r from-emerald-600 to-cyan-600 px-6 py-2 rounded-full border border-emerald-400/30 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
           <span className="font-extrabold tracking-widest text-xs drop-shadow-md text-white">
             {gameState.status === 'waiting' && '等待房長開始'}
@@ -309,13 +289,12 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
         </div>
       </div>
 
-      {/* 畫布與聊天佈局 */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-6 p-4 md:px-8 pb-8 z-10 overflow-hidden relative">
+      {/* 🚀 畫布與聊天佈局 (加大畫布比例) */}
+      <div className="flex-1 flex flex-col lg:flex-row gap-4 md:gap-6 p-2 md:p-6 pb-6 z-10 overflow-hidden relative w-full max-w-[1920px] mx-auto">
         
-        {/* 左側：主畫布區 */}
-        <div className="flex-1 flex flex-col h-full gap-4 max-h-[80vh] lg:max-h-none relative">
+        {/* 左側：主畫布區 (高度與寬度佔比加大) */}
+        <div className="flex-[3] lg:flex-[4] xl:flex-[5] flex flex-col h-full gap-3 relative min-h-[55vh] md:min-h-[70vh]">
           
-          {/* === 狀態蓋板：等待中 === */}
           {gameState.status === 'waiting' && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-md rounded-[2.5rem] border border-white/10">
               <h2 className="text-3xl font-black mb-8 tracking-widest text-emerald-400 drop-shadow-[0_0_15px_rgba(52,211,153,0.5)]">🎨 準備發揮你的靈魂畫技</h2>
@@ -329,20 +308,15 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             </div>
           )}
 
-          {/* === 狀態蓋板：選詞中 === */}
           {gameState.status === 'selecting' && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md rounded-[2.5rem] border border-white/10 p-6">
               {isMyTurnToDraw ? (
                 <div className="w-full max-w-md bg-white/5 border border-white/10 p-8 rounded-[2rem] text-center shadow-2xl animate-in zoom-in duration-300">
                   <h3 className="text-2xl font-black mb-2 text-emerald-400">輪到你了！</h3>
                   <p className="text-sm text-white/50 mb-8">請選擇你要畫的題目</p>
-                  
                   {rules.wordMode === 'drawer' || rules.wordMode === 'custom' ? (
                     <form onSubmit={(e) => { e.preventDefault(); submitWord(customWord); }} className="space-y-4">
-                      <input 
-                        type="text" required placeholder="輸入你想畫的詞..." value={customWord} onChange={e => setCustomWord(e.target.value)}
-                        className="w-full bg-black/40 border border-white/20 rounded-2xl py-4 px-6 text-center outline-none focus:border-emerald-500 transition-colors"
-                      />
+                      <input type="text" required placeholder="輸入你想畫的詞..." value={customWord} onChange={e => setCustomWord(e.target.value)} className="w-full bg-black/40 border border-white/20 rounded-2xl py-4 px-6 text-center outline-none focus:border-emerald-500 transition-colors" />
                       <button className="w-full py-4 rounded-2xl bg-emerald-600 font-bold hover:bg-emerald-500 transition-colors">確認題目</button>
                     </form>
                   ) : (
@@ -364,7 +338,6 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             </div>
           )}
 
-          {/* === 狀態蓋板：回合結束 === */}
           {gameState.status === 'turn_end' && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md rounded-[2.5rem] border border-white/10">
               <h3 className="text-xl font-bold text-white/50 mb-2 tracking-widest uppercase">本回合答案是</h3>
@@ -373,7 +346,6 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             </div>
           )}
 
-          {/* === 狀態蓋板：遊戲結算 === */}
           {gameState.status === 'game_over' && (
             <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 backdrop-blur-xl rounded-[2.5rem] border border-white/10 p-6 animate-in fade-in duration-500">
               <h2 className="text-4xl font-black text-emerald-400 mb-8 drop-shadow-[0_0_20px_rgba(52,211,153,0.5)]">🏆 遊戲結算</h2>
@@ -388,16 +360,19 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
                   </div>
                 ))}
               </div>
-              <button onClick={handleLeaveRoom} className="px-10 py-4 rounded-full bg-white/10 hover:bg-white/20 font-bold transition-colors">返回大廳</button>
+              <div className="flex gap-4">
+                <button onClick={handleLeaveRoom} className="px-8 py-4 rounded-full bg-white/5 hover:bg-white/10 font-bold transition-colors">返回大廳</button>
+                {isHost && (
+                  <button onClick={() => update(ref(database, `rooms/${roomId}/info`), { status: 'waiting' })} className="px-8 py-4 rounded-full bg-emerald-600 hover:bg-emerald-500 font-bold transition-colors text-white shadow-[0_0_15px_rgba(16,185,129,0.4)]">再來一局</button>
+                )}
+              </div>
             </div>
           )}
 
           {/* 畫布本體 */}
-          <div className="flex-1 bg-black/40 backdrop-blur-xl border border-white/10 rounded-[2.5rem] shadow-[0_0_40px_rgba(0,0,0,0.5)] relative overflow-hidden group">
-            
-            {/* 題目提示 (畫家看真實字，猜題者看 OOO) */}
+          <div className="flex-1 w-full bg-black/40 backdrop-blur-xl border border-white/10 rounded-[2rem] md:rounded-[2.5rem] shadow-[0_0_40px_rgba(0,0,0,0.5)] relative overflow-hidden group">
             {gameState.status === 'drawing' && (
-              <div className="absolute top-6 left-0 right-0 flex justify-center pointer-events-none z-10">
+              <div className="absolute top-4 md:top-6 left-0 right-0 flex justify-center pointer-events-none z-10">
                 <div className="bg-black/60 backdrop-blur-md px-6 py-2 rounded-full border border-white/10 shadow-lg text-center">
                   <span className="text-[10px] text-white/50 block tracking-widest mb-1 uppercase">
                     {isMyTurnToDraw ? '你要畫的是' : `${roomData?.players?.[currentDrawerUid]?.name} 正在畫`}
@@ -420,38 +395,37 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             />
           </div>
 
-          {/* 工具列 (只有畫家能點擊) */}
-          <div className={`h-20 bg-white/5 backdrop-blur-md border border-white/10 rounded-[2rem] flex items-center justify-between px-6 shadow-lg flex-shrink-0 transition-opacity ${!isMyTurnToDraw ? 'opacity-30 pointer-events-none' : ''}`}>
-            <div className="flex gap-2 overflow-x-auto scrollbar-hide pr-4">
+          {/* 工具列 */}
+          <div className={`h-16 md:h-20 w-full bg-white/5 backdrop-blur-md border border-white/10 rounded-[1.5rem] md:rounded-[2rem] flex items-center justify-between px-4 md:px-6 shadow-lg flex-shrink-0 transition-opacity ${!isMyTurnToDraw ? 'opacity-30 pointer-events-none' : ''}`}>
+            <div className="flex gap-2 overflow-x-auto scrollbar-hide pr-2">
               {COLORS.map(c => (
                 <button
                   key={c.hex} onClick={() => setColor(c.hex)} title={c.name}
-                  className={`w-10 h-10 rounded-full flex-shrink-0 transition-all border-2 ${color === c.hex ? 'scale-110 shadow-[0_0_15px_currentColor]' : 'border-transparent hover:scale-105'}`}
+                  className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 transition-all border-2 ${color === c.hex ? 'scale-110 shadow-[0_0_15px_currentColor]' : 'border-transparent hover:scale-105'}`}
                   style={{ backgroundColor: c.hex === '#000000' ? '#262626' : c.hex, borderColor: color === c.hex ? '#fff' : 'transparent', color: c.hex }}
                 >
-                  {c.hex === '#000000' && <span className="text-white text-[10px] font-bold block mt-2.5">橡皮</span>}
+                  {c.hex === '#000000' && <span className="text-white text-[9px] md:text-[10px] font-bold block mt-2 md:mt-2.5">橡皮</span>}
                 </button>
               ))}
             </div>
 
-            <div className="flex items-center gap-4 border-l border-white/10 pl-4">
-              <div className="flex gap-2 items-center mr-2 hidden sm:flex">
+            <div className="flex items-center gap-3 border-l border-white/10 pl-3">
+              <div className="flex gap-2 items-center mr-1 hidden sm:flex">
                 <div className="w-2 h-2 rounded-full bg-white/50"></div>
-                <input type="range" min="2" max="20" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} className="w-20 accent-emerald-500" />
-                <div className="w-4 h-4 rounded-full bg-white/80"></div>
+                <input type="range" min="2" max="20" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} className="w-16 md:w-20 accent-emerald-500" />
+                <div className="w-3 h-3 md:w-4 md:h-4 rounded-full bg-white/80"></div>
               </div>
-              <button onClick={clearCanvas} className="px-4 py-2 bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 rounded-xl text-xs font-bold transition-colors whitespace-nowrap">
+              <button onClick={clearCanvas} className="px-3 md:px-4 py-2 bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 rounded-xl text-[10px] md:text-xs font-bold transition-colors whitespace-nowrap">
                 🗑️ 清空
               </button>
             </div>
           </div>
         </div>
 
-        {/* 右側：玩家列表與聊天區 */}
-        <div className="w-full lg:w-[350px] bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-[2.5rem] flex flex-col overflow-hidden shadow-2xl h-[500px] lg:h-auto z-10 relative">
+        {/* 🚀 右側：玩家列表與聊天區 (佔比縮小) */}
+        <div className="w-full lg:w-[260px] xl:w-[320px] bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-[2rem] md:rounded-[2.5rem] flex flex-col overflow-hidden shadow-2xl h-[400px] lg:h-auto z-10 relative">
           
-          {/* 玩家記分板 */}
-          <div className="p-4 border-b border-white/5 bg-black/20 flex gap-2 overflow-x-auto scrollbar-hide">
+          <div className="p-3 md:p-4 border-b border-white/5 bg-black/20 flex gap-2 overflow-x-auto scrollbar-hide">
             {alivePlayers.map(uid => {
               const p = roomData.players[uid];
               const score = gameState.scores?.[uid] || 0;
@@ -459,18 +433,18 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
               const hasGuessed = gameState.correctGuesserIds?.includes(uid);
               return (
                 <div key={uid} className={`flex flex-col items-center flex-shrink-0 transition-all ${isDrawingNow ? 'scale-110 mx-2' : 'opacity-80'}`}>
-                  <div className={`w-10 h-10 rounded-full border-2 overflow-hidden relative ${isDrawingNow ? 'border-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]' : (hasGuessed ? 'border-yellow-400' : 'border-white/10')}`}>
+                  <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full border-2 overflow-hidden relative ${isDrawingNow ? 'border-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]' : (hasGuessed ? 'border-yellow-400' : 'border-white/10')}`}>
                     <img src={p?.avatar} className="w-full h-full object-cover" />
                     {hasGuessed && <div className="absolute inset-0 bg-yellow-400/30 flex items-center justify-center text-sm">💡</div>}
                     {isDrawingNow && <div className="absolute inset-0 bg-emerald-500/30 flex items-center justify-center text-sm">✏️</div>}
                   </div>
-                  <span className="text-[10px] font-bold mt-1 text-white/80">{score} pt</span>
+                  <span className="text-[9px] md:text-[10px] font-bold mt-1 text-white/80">{score} pt</span>
                 </div>
               );
             })}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
             {roomData?.chat && Object.values(roomData.chat).sort((a,b) => a.timestamp - b.timestamp).map((m, i) => {
               const isMe = m.senderId === user?.uid;
               const isSystem = m.senderId === 'system';
@@ -478,27 +452,27 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
               if (isSystem) {
                 return (
                   <div key={i} className="flex justify-center w-full">
-                    <span className="bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold px-4 py-1.5 rounded-full">{m.text}</span>
+                    <span className="bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[10px] md:text-[11px] font-bold px-3 md:px-4 py-1 md:py-1.5 rounded-full">{m.text}</span>
                   </div>
                 );
               }
 
               return (
-                <div key={i} className={`flex gap-3 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
-                  <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 bg-white/5 border border-white/10"><img src={m.avatar} className="w-full h-full object-cover" /></div>
-                  <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-[75%]`}>
-                    {!isMe && <span className="text-[10px] text-white/40 ml-2 mb-1">{m.senderName}</span>}
-                    <div className={`px-4 py-2.5 rounded-2xl text-[13px] ${isMe ? 'bg-white/20 border border-white/10 rounded-tr-none shadow-md' : 'bg-white/5 border border-white/5 rounded-tl-none'}`}>{m.text}</div>
+                <div key={i} className={`flex gap-2.5 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                  <div className="w-6 h-6 md:w-8 md:h-8 rounded-full overflow-hidden flex-shrink-0 bg-white/5 border border-white/10"><img src={m.avatar} className="w-full h-full object-cover" /></div>
+                  <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-[80%]`}>
+                    {!isMe && <span className="text-[9px] md:text-[10px] text-white/40 ml-2 mb-0.5">{m.senderName}</span>}
+                    <div className={`px-3 md:px-4 py-2 rounded-2xl text-xs md:text-[13px] ${isMe ? 'bg-white/20 border border-white/10 rounded-tr-none shadow-md' : 'bg-white/5 border border-white/5 rounded-tl-none'}`}>{m.text}</div>
                   </div>
                 </div>
               );
             })}
           </div>
           
-          <div className="p-4 border-t border-white/5 bg-black/20">
+          <div className="p-3 md:p-4 border-t border-white/5 bg-black/20">
             <form onSubmit={handleSendMessage} className="relative">
-              <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder={isMyTurnToDraw ? "畫家不可以暴雷喔..." : "輸入你的猜測..."} disabled={isMyTurnToDraw && isDrawingState} className="w-full bg-white/5 border border-white/10 rounded-full py-4 pl-5 pr-16 outline-none focus:border-emerald-500/50 text-sm placeholder:text-white/20 font-light disabled:opacity-50 disabled:cursor-not-allowed" />
-              <button disabled={isMyTurnToDraw && isDrawingState} className="absolute right-2 top-2 bottom-2 px-4 bg-white/10 border border-white/20 rounded-full font-bold text-xs hover:bg-white/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed">發送</button>
+              <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder={isMyTurnToDraw ? "畫家不可暴雷..." : "輸入猜測..."} disabled={isMyTurnToDraw && isDrawingState} className="w-full bg-white/5 border border-white/10 rounded-full py-3 md:py-4 pl-4 pr-14 outline-none focus:border-emerald-500/50 text-xs md:text-sm placeholder:text-white/20 font-light disabled:opacity-50 disabled:cursor-not-allowed" />
+              <button disabled={isMyTurnToDraw && isDrawingState} className="absolute right-1.5 top-1.5 bottom-1.5 px-3 md:px-4 bg-white/10 border border-white/20 rounded-full font-bold text-[10px] md:text-xs hover:bg-white/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed">發送</button>
             </form>
           </div>
         </div>
