@@ -29,20 +29,20 @@ export default function TicTacToe({ roomId, gameState, currentUser }) {
   };
 
   return (
-    <div className="flex flex-col items-center py-20 animate-in fade-in duration-1000">
-      <div className={`text-4xl font-black mb-12 tracking-tighter italic ${isMyTurn ? 'text-indigo-400' : 'text-white/20'}`}>
-        {winner ? (winner === 'draw' ? '雙方平手' : `勝利者: ${winner}`) : (isMyTurn ? "輪到你了" : "等待對手下棋...")}
+    <div className="flex flex-col items-center py-20 animate-in fade-in zoom-in duration-700">
+      <div className={`text-4xl font-black mb-16 tracking-tighter italic ${isMyTurn ? 'text-indigo-400' : 'text-white/10'}`}>
+        {winner ? (winner === 'draw' ? '握手言和' : `優勝者: ${winner}`) : (isMyTurn ? "輪到你了" : "對方思考中...")}
       </div>
       
-      <div className="grid grid-cols-3 gap-6 bg-white/[0.03] p-10 rounded-[3.5rem] border border-white/10 backdrop-blur-3xl shadow-2xl relative">
+      <div className="grid grid-cols-3 gap-6 bg-white/[0.02] p-10 rounded-[3.5rem] border border-white/10 backdrop-blur-3xl shadow-2xl relative">
         {board.map((cell, i) => (
           <button 
             key={i} 
             onClick={() => handleMove(i)}
-            className="w-24 h-24 md:w-32 md:h-32 bg-white/[0.03] rounded-[2rem] text-6xl border border-white/5 hover:border-indigo-500/30 transition-all flex items-center justify-center"
+            className="w-24 h-24 md:w-32 md:h-32 bg-white/[0.03] rounded-[2.5rem] text-6xl border border-white/5 hover:border-indigo-500/30 transition-all flex items-center justify-center shadow-inner"
           >
-            {cell === 'O' && <span className="text-indigo-400 drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">○</span>}
-            {cell === 'X' && <span className="text-purple-400 drop-shadow-[0_0_15px_rgba(168,85,247,0.5)]">×</span>}
+            {cell === 'O' && <span className="text-indigo-400 drop-shadow-[0_0_15px_rgba(99,102,241,0.6)] font-light">○</span>}
+            {cell === 'X' && <span className="text-purple-400 drop-shadow-[0_0_15px_rgba(168,85,247,0.6)] font-light">×</span>}
           </button>
         ))}
       </div>
@@ -50,7 +50,7 @@ export default function TicTacToe({ roomId, gameState, currentUser }) {
       {winner && (
         <button 
           onClick={() => update(ref(database, `rooms/${roomId}/info`), { status: 'waiting' })}
-          className="mt-12 px-14 py-6 bg-white text-black rounded-[2.5rem] font-black hover:scale-105 transition-all shadow-xl"
+          className="mt-16 px-16 py-6 bg-white text-black rounded-[2.5rem] font-black hover:scale-105 transition-all shadow-xl"
         >
           返回大廳
         </button>
