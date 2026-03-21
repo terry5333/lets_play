@@ -23,7 +23,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     setChatInput('');
   };
 
-  // 🎨 外部白板 URL (使用開源的 WBO 白板，並綁定你的 roomId 確保隱私)
+  // 🎨 外部白板 URL
   const whiteboardUrl = `https://wbo.ophir.dev/boards/gamebar_vibe_${roomId}`;
 
   return (
@@ -53,15 +53,17 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
 
       <div className="flex-1 flex flex-col lg:flex-row gap-4 md:gap-6 p-2 md:p-6 pb-6 z-10 overflow-hidden relative w-full max-w-[1920px] mx-auto">
         
-        {/* 左側：外部白板區 (Iframe 嵌入) */}
-        <div className="flex-[3] lg:flex-[4] xl:flex-[5] flex flex-col h-full gap-3 relative min-h-[55vh] md:min-h-[70vh]">
-          <div className="flex-1 w-full bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-[0_0_40px_rgba(0,0,0,0.5)] relative overflow-hidden group">
-            {/* 嵌入 WBO 開源白板 */}
+        {/* 🚀 左側：外部白板區 (強制撐滿高度) */}
+        <div className="flex-[3] lg:flex-[4] xl:flex-[5] flex flex-col w-full h-full min-h-[60vh] md:min-h-[75vh] relative">
+          <div className="flex-1 w-full h-full bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-[0_0_40px_rgba(0,0,0,0.5)] relative overflow-hidden group">
+            {/* 💡 修復關鍵：使用 absolute inset-0 強制 iframe 填滿整個外框 */}
             <iframe 
               src={whiteboardUrl} 
-              className="w-full h-full border-none"
+              className="absolute inset-0 w-full h-full border-none"
+              style={{ display: 'block' }}
               title="External Whiteboard"
               allow="pointer-lock"
+              scrolling="no"
             />
           </div>
         </div>
