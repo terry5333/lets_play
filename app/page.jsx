@@ -10,7 +10,7 @@ import {
   updateProfile,
   linkWithPopup
 } from 'firebase/auth';
-import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove, get } from 'firebase/database';
+import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove, get, query, orderByChild, limitToLast, increment } from 'firebase/database';
 import { auth, database, googleProvider } from '../lib/firebaseConfig';
 
 export default function GamePlatform() {
@@ -26,17 +26,32 @@ export default function GamePlatform() {
   const [roomId, setRoomId] = useState('');
   const [roomData, setRoomData] = useState(null);
   const [chatInput, setChatInput] = useState('');
+  
+  // 🏆 排行榜狀態
+  const [leaderboard, setLeaderboard] = useState([]);
 
   // ==========================================
-  // 1. 生命週期與邏輯
+  // 1. 生命週期與全域資料同步
   // ==========================================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        const snap = await get(ref(database, `users/${currentUser.uid}/currentRoom`));
-        const activeRoom = snap.val();
         
+        // 🛠️ 同步使用者的公開資料到資料庫，讓排行榜抓得到
+        const userRef = ref(database, `users/${currentUser.uid}`);
+        const userSnap = await get(userRef);
+        const userData = userSnap.val() || {};
+        
+        const updates = {
+          name: currentUser.displayName || '無名氏',
+          avatar: currentUser.photoURL || `https://api.dicebear.com/7.x/micah/svg?seed=${currentUser.uid}&backgroundColor=transparent`
+        };
+        // 如果是新玩家，給他初始積分 0
+        if (userData.score === undefined) updates.score = 0;
+        await update(userRef, updates);
+
+        const activeRoom = userData.currentRoom;
         if (activeRoom) {
           setRoomId(activeRoom);
           setView('room');
@@ -51,6 +66,25 @@ export default function GamePlatform() {
     return () => unsubscribe();
   }, []);
 
+  // 監聽排行榜資料 (只在大廳抓取前 10 名)
+  useEffect(() => {
+    if (view === 'lobby') {
+      const topUsersQuery = query(ref(database, 'users'), orderByChild('score'), limitToLast(10));
+      const unsub = onValue(topUsersQuery, (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+          // 將物件轉為陣列，過濾掉沒有分數的，並由高到低排序
+          const sortedList = Object.values(data)
+            .filter(u => u.score !== undefined)
+            .sort((a, b) => b.score - a.score);
+          setLeaderboard(sortedList);
+        }
+      });
+      return () => unsub();
+    }
+  }, [view]);
+
+  // 房間內即時監聽與自動銷毀
   useEffect(() => {
     if (view === 'room' && roomId && user) {
       const roomRef = ref(database, `rooms/${roomId}`);
@@ -58,7 +92,6 @@ export default function GamePlatform() {
       
       onDisconnect(myPlayerRef).remove();
 
-      // 寫入房間時，優先使用 user.photoURL
       set(myPlayerRef, {
         uid: user.uid,
         name: user.displayName || '無名氏',
@@ -68,7 +101,6 @@ export default function GamePlatform() {
 
       const unsubscribe = onValue(roomRef, (snapshot) => {
         const data = snapshot.val();
-        
         if (!data || !data.players || !data.players[user.uid]) {
           remove(ref(database, `users/${user.uid}/currentRoom`));
           onDisconnect(myPlayerRef).cancel();
@@ -97,11 +129,13 @@ export default function GamePlatform() {
     }
   }, [view, roomId, user]);
 
+  // ==========================================
+  // 2. 登入與基礎邏輯
+  // ==========================================
   const handleAuth = async (e) => {
     e.preventDefault();
     const isValidUsername = /^[a-zA-Z0-9]+$/.test(username);
     if (!isValidUsername) return alert("帳號只能包含英文和數字！");
-
     const fakeEmail = `${username.toLowerCase()}@gamebar.local`;
 
     try {
@@ -113,11 +147,7 @@ export default function GamePlatform() {
       } else {
         await signInWithEmailAndPassword(auth, fakeEmail, password);
       }
-    } catch (err) { 
-      if (err.code === 'auth/email-already-in-use') alert("帳號被註冊走囉！");
-      else if (err.code === 'auth/invalid-credential') alert("帳號或密碼錯誤！");
-      else alert("驗證失敗: " + err.message); 
-    }
+    } catch (err) { alert("驗證失敗: " + err.message); }
   };
 
   const extractAndUpgradeGoogleAvatar = async (currentUser) => {
@@ -147,10 +177,7 @@ export default function GamePlatform() {
       const upgradedUser = await extractAndUpgradeGoogleAvatar(result.user);
       setUser(upgradedUser); 
       alert("✅ 成功綁定 Google 帳號！頭像已自動同步。");
-    } catch (err) {
-      if (err.code === 'auth/credential-already-in-use') alert("這組 Google 已被綁定！");
-      else alert("綁定失敗: " + err.message);
-    }
+    } catch (err) { alert("綁定失敗: " + err.message); }
   };
 
   const isGoogleLinked = user?.providerData?.some(p => p.providerId === 'google.com');
@@ -160,24 +187,26 @@ export default function GamePlatform() {
     const newAvatar = `https://api.dicebear.com/7.x/micah/svg?seed=${randomSeed}&backgroundColor=transparent`;
     await updateProfile(user, { photoURL: newAvatar });
     setUser({ ...user, photoURL: newAvatar });
+    update(ref(database, `users/${user.uid}`), { avatar: newAvatar }); // 同步到資料庫
   };
 
+  // 🏆 測試按鈕：模擬贏得比賽加分
+  const handleWinGameDemo = () => {
+    update(ref(database, `users/${user.uid}`), { score: increment(50) });
+  };
+
+  // ==========================================
+  // 3. 房間操作邏輯
+  // ==========================================
   const handleCreateRoom = () => {
     const newRoomId = Math.floor(1000 + Math.random() * 9000).toString();
     const updates = {};
     updates[`rooms/${newRoomId}/info`] = { hostId: user.uid, status: 'waiting' };
     updates[`rooms/${newRoomId}/players/${user.uid}`] = { 
-      uid: user.uid, 
-      name: user.displayName || '無名氏', 
-      avatar: user.photoURL || `https://api.dicebear.com/7.x/micah/svg?seed=${user.uid}&backgroundColor=transparent`,
-      joinedAt: serverTimestamp() 
+      uid: user.uid, name: user.displayName || '無名氏', avatar: user.photoURL || '', joinedAt: serverTimestamp() 
     };
     updates[`users/${user.uid}/currentRoom`] = newRoomId;
-    
-    update(ref(database), updates).then(() => {
-      setRoomId(newRoomId);
-      setView('room');
-    });
+    update(ref(database), updates).then(() => { setRoomId(newRoomId); setView('room'); });
   };
 
   const handleJoinRoom = async (e) => {
@@ -188,18 +217,10 @@ export default function GamePlatform() {
     
     const updates = {};
     updates[`rooms/${joinInput}/players/${user.uid}`] = { 
-      uid: user.uid, 
-      name: user.displayName || '無名氏', 
-      avatar: user.photoURL || `https://api.dicebear.com/7.x/micah/svg?seed=${user.uid}&backgroundColor=transparent`,
-      joinedAt: serverTimestamp() 
+      uid: user.uid, name: user.displayName || '無名氏', avatar: user.photoURL || '', joinedAt: serverTimestamp() 
     };
     updates[`users/${user.uid}/currentRoom`] = joinInput;
-    
-    update(ref(database), updates).then(() => {
-      setRoomId(joinInput);
-      setJoinInput('');
-      setView('room');
-    });
+    update(ref(database), updates).then(() => { setRoomId(joinInput); setJoinInput(''); setView('room'); });
   };
 
   const handleLeaveRoom = async () => {
@@ -224,20 +245,13 @@ export default function GamePlatform() {
     e.preventDefault();
     if (!chatInput.trim()) return;
     push(ref(database, `rooms/${roomId}/chat`), {
-      senderId: user.uid,
-      senderName: user.displayName || '玩家',
-      avatar: user.photoURL || '',
-      text: chatInput,
-      timestamp: Date.now()
+      senderId: user.uid, senderName: user.displayName, avatar: user.photoURL || '', text: chatInput, timestamp: Date.now()
     });
     setChatInput('');
   };
 
-  // 💡 補回的關鍵變數！
-  const isHost = roomData?.info?.hostId === user?.uid;
-
   // ==========================================
-  // 2. UI 渲染保持極致美學
+  // 4. UI 渲染 (Apple Vision Pro Style)
   // ==========================================
 
   const AmbientBackground = () => (
@@ -264,6 +278,7 @@ export default function GamePlatform() {
           </div>
         )}
 
+        {/* 登入畫面保持不變... */}
         {view === 'login' && (
           <div className="h-screen flex items-center justify-center p-6 relative z-10">
             <div className="w-full max-w-md bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-[0_8px_40px_rgba(0,0,0,0.5)] rounded-[3rem] p-10 md:p-14">
@@ -322,12 +337,17 @@ export default function GamePlatform() {
                   <span className="text-sm font-medium opacity-90 leading-tight">{user?.displayName || '無名氏'}</span>
                   <div className="flex items-center gap-2 mt-0.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></div>
-                    <span className="text-[9px] text-white/40 tracking-widest uppercase">Online</span>
+                    <span className="text-[9px] text-white/40 tracking-widest uppercase font-mono">PTS: {leaderboard.find(u => u.uid === user.uid)?.score || 0}</span>
                   </div>
                 </div>
                 
                 <div className="h-6 w-px bg-white/10 mx-2"></div>
                 
+                {/* 🏆 測試按鈕：模擬贏得比賽 */}
+                <button onClick={handleWinGameDemo} className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors mr-2 border border-emerald-500/30 px-3 py-1.5 rounded-full bg-emerald-500/10">
+                  測試贏得比賽 (+50)
+                </button>
+
                 {!isGoogleLinked && (
                   <button onClick={handleLinkGoogle} className="text-[11px] font-medium text-white/60 hover:text-white transition-colors mr-2">綁定 Google</button>
                 )}
@@ -335,7 +355,8 @@ export default function GamePlatform() {
               </div>
             </div>
             
-            <div className="w-full max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
+            {/* 上半部：包廂操作區 */}
+            <div className="w-full max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
               <button onClick={handleCreateRoom} className="group bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-12 text-left hover:bg-white/[0.04] transition-all duration-500 overflow-hidden relative">
                 <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 group-hover:bg-white/10 transition-colors"></div>
                 <h2 className="text-4xl font-semibold mb-4 tracking-tight relative z-10">開創包廂</h2>
@@ -351,6 +372,52 @@ export default function GamePlatform() {
                     進入
                   </button>
                 </form>
+              </div>
+            </div>
+
+            {/* 下半部：🏆 殿堂級排行榜 */}
+            <div className="w-full max-w-6xl mx-auto bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-10 mt-4 relative overflow-hidden">
+              <div className="absolute -top-32 -right-32 w-96 h-96 bg-yellow-500/10 blur-[100px] rounded-full mix-blend-screen pointer-events-none"></div>
+              
+              <div className="flex items-center justify-between mb-8 relative z-10">
+                <div>
+                  <h2 className="text-2xl font-semibold tracking-tight">全服排行榜</h2>
+                  <p className="text-white/30 text-[10px] tracking-widest uppercase mt-1">Hall of Fame</p>
+                </div>
+                <div className="px-4 py-2 bg-white/5 border border-white/10 rounded-full text-xs font-mono text-white/50">
+                  TOP 10 PLAYERS
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 relative z-10">
+                {leaderboard.length === 0 && <div className="text-white/30 text-sm p-4">目前還沒有玩家上榜，快去贏得第一場比賽！</div>}
+                {leaderboard.map((p, index) => {
+                  // 前三名專屬光效
+                  const isTop1 = index === 0;
+                  const isTop2 = index === 1;
+                  const isTop3 = index === 2;
+                  let borderGlow = "border-white/[0.05]";
+                  let textGlow = "text-white/80";
+                  
+                  if (isTop1) { borderGlow = "border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.2)] bg-yellow-500/5"; textGlow = "text-yellow-400 font-bold"; }
+                  else if (isTop2) { borderGlow = "border-slate-300/50 shadow-[0_0_15px_rgba(203,213,225,0.1)] bg-slate-400/5"; textGlow = "text-slate-300 font-bold"; }
+                  else if (isTop3) { borderGlow = "border-orange-400/50 shadow-[0_0_15px_rgba(251,146,60,0.1)] bg-orange-500/5"; textGlow = "text-orange-400 font-bold"; }
+
+                  return (
+                    <div key={p.uid} className={`flex items-center gap-4 p-5 rounded-[2rem] border backdrop-blur-sm transition-all hover:scale-105 ${borderGlow}`}>
+                      <div className="w-12 h-12 rounded-full bg-black/40 overflow-hidden flex-shrink-0 relative">
+                        <img src={p.avatar} alt={p.name} className="w-full h-full object-cover" />
+                        {isTop1 && <div className="absolute -top-1 -right-1 text-lg">👑</div>}
+                      </div>
+                      <div className="flex flex-col truncate">
+                        <span className="text-sm font-medium truncate">{p.name}</span>
+                        <span className={`text-[11px] tracking-widest uppercase font-mono mt-0.5 ${textGlow}`}>
+                          {p.score} PTS
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
