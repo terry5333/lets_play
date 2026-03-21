@@ -8,7 +8,67 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
   const [chatInput, setChatInput] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  const startGame = () => update(ref(database, `rooms/${roomId}/info`), { status: 'playing' });
+  // 🃏 炸彈貓：發牌與遊戲初始化引擎
+  const startGame = () => {
+    const playerIds = Object.keys(roomData.players || {});
+    if (playerIds.length < 2) return alert("至少需要 2 名玩家才能開始互相陷害！");
+
+    // 1. 定義卡牌庫 (扣除炸彈與拆除)
+    const baseCards = [
+      ...Array(4).fill('skip'),   // 跳過 4張
+      ...Array(4).fill('attack'), // 攻擊 4張
+      ...Array(5).fill('see'),    // 預言(查看未來) 5張
+      ...Array(4).fill('shuffle'),// 洗牌 4張
+      ...Array(4).fill('favor')   // 索要(偷取) 4張
+    ];
+
+    // 洗牌演算法 (Fisher-Yates)
+    const shuffleArray = (array) => {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    };
+
+    let shuffledBaseDeck = shuffleArray([...baseCards]);
+    const initialHands = {};
+
+    // 2. 發牌給每位玩家：1 張拆除 + 4 張隨機卡
+    playerIds.forEach(uid => {
+      initialHands[uid] = ['defuse']; // 保底一張拆除卡
+      for (let i = 0; i < 4; i++) {
+        initialHands[uid].push(shuffledBaseDeck.pop());
+      }
+    });
+
+    // 3. 將剩下的拆除卡與炸彈貓放入牌堆並再次洗牌
+    const remainingDefuseCount = playerIds.length === 2 ? 2 : 6 - playerIds.length;
+    const bombCount = playerIds.length - 1; // 炸彈數量 = 玩家數 - 1
+    
+    let finalDeck = [
+      ...shuffledBaseDeck,
+      ...Array(remainingDefuseCount).fill('defuse'),
+      ...Array(bombCount).fill('bomb')
+    ];
+    finalDeck = shuffleArray(finalDeck);
+
+    // 4. 將初始遊戲狀態寫入 Firebase
+    const gameState = {
+      deck: finalDeck,
+      discardPile: ['start'], // 初始棄牌堆
+      hands: initialHands,
+      currentTurn: playerIds[0], // 房長先手
+      turnActionsCount: 1,       // 預設這回合要抽 1 張牌
+      alivePlayers: playerIds,
+      explosionState: null       // 紀錄是否有人抽到炸彈
+    };
+
+    const updates = {};
+    updates[`rooms/${roomId}/info/status`] = 'playing';
+    updates[`rooms/${roomId}/gameState`] = gameState;
+    update(ref(database), updates);
+  };
 
   const handleSendMessage = (e) => {
     e.preventDefault();
@@ -17,6 +77,7 @@ export default function WaitingRoom({ user, roomId, roomData, isHost, handleLeav
     setChatInput('');
   };
 
+  // ... (下方的 UI 渲染保持不變，保留你現在漂亮的大廳畫面)
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#321c60] via-[#211142] to-[#120726] text-white flex flex-col font-sans relative overflow-hidden">
       {/* 頂部狀態列 */}
