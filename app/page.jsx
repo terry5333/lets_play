@@ -102,8 +102,6 @@ export default function GamePlatform() {
         }
 
         const playersList = data.players || {};
-        
-        // 🔥 神級修復：使用精準路徑更新 hostId，絕對不覆蓋 status！
         if (!data.info?.hostId || !playersList[data.info.hostId]) {
           update(ref(database), { [`rooms/${roomId}/info/hostId`]: user.uid });
         }
@@ -243,7 +241,8 @@ export default function GamePlatform() {
           />
         )}
 
-        {view === 'room' && roomData?.info?.status === 'playing' && (
+        {/* 💡 修改這裡：同時支援 playing 與 finished 狀態 */}
+        {view === 'room' && ['playing', 'finished'].includes(roomData?.info?.status) && (
           <BoomCat 
             user={user} roomId={roomId} roomData={roomData} 
             handleLeaveRoom={handleLeaveRoom} 
