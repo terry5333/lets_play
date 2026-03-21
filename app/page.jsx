@@ -9,7 +9,7 @@ import {
   signOut,
   updateProfile
 } from 'firebase/auth';
-import { auth, googleProvider } from './lib/firebaseConfig';
+import { auth, googleProvider } from '.@/lib/firebaseConfig';
 
 export default function LoginPage() {
   const [user, setUser] = useState(null);
