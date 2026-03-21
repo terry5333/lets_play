@@ -16,44 +16,39 @@ export default function RoomWaitingArea({ roomId = "1234" }) {
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    // 匿名登入
     signInAnonymously(auth).then(res => setCurrentUser(res.user));
   }, []);
 
   useEffect(() => {
     if (!currentUser) return;
     
-    // 1. 🛠️ 最強防線：實作「伺服器端離線清理」
-    // 當連線中斷，Firebase 伺服器會自動刪除我的節點
+    // 🛡️ 離線自動清理：關掉視窗就踢掉玩家
     const myPlayerRef = ref(database, `rooms/${roomId}/players/${currentUser.uid}`);
-    onDisconnect(myPlayerRef).remove()
-      .then(() => console.log('✅ 離線清理已就緒'))
-      .catch(e => console.error('❌ onDisconnect error:', e));
+    onDisconnect(myPlayerRef).remove();
 
-    // 2. 註冊玩家與更新狀態
-    update(myPlayerRef, {
+    // 註冊玩家資訊
+    set(myPlayerRef, {
       uid: currentUser.uid,
-      displayName: `Gamer_${currentUser.uid.slice(0, 4)}`,
-      lastSeen: serverTimestamp(),
-      isReady: false
+      displayName: `玩家 ${currentUser.uid.slice(0, 4)}`,
+      isReady: false,
+      joinedAt: serverTimestamp()
     });
 
-    // 3. 監聽房間資料
     const roomRef = ref(database, `rooms/${roomId}`);
     return onValue(roomRef, (snapshot) => {
       const data = snapshot.val() || {};
       
-      // 如果房間沒 host，把我自己設為 host
-      if (!data.info || !data.info.hostId) {
+      // 👑 強行奪權邏輯：如果目前沒有房長，或是房長不在玩家名單裡，就把我設為房長
+      const playerList = data.players || {};
+      if (!data.info?.hostId || !playerList[data.info.hostId]) {
         update(ref(database, `rooms/${roomId}/info`), { 
           status: 'waiting', 
-          hostId: currentUser.uid,
-          gameType: 'tic-tac-toe' 
+          hostId: currentUser.uid 
         });
       }
 
       setRoomInfo(data.info || { status: 'waiting' });
-      setPlayers(data.players || {});
+      setPlayers(playerList);
       setGameState(data.gameState || null);
       setMessages(data.chat ? Object.values(data.chat).sort((a,b) => a.timestamp - b.timestamp) : []);
       setIsLoaded(true);
@@ -62,8 +57,6 @@ export default function RoomWaitingArea({ roomId = "1234" }) {
 
   const handleStart = () => {
     const ids = Object.keys(players || {});
-    // if (ids.length < 2) return alert("人數不足"); // 測試時可註解
-    
     update(ref(database, `rooms/${roomId}`), {
       "info/status": "playing",
       "gameState": {
@@ -74,99 +67,84 @@ export default function RoomWaitingArea({ roomId = "1234" }) {
     });
   };
 
-  // 房長判斷
+  // 房長判斷邏輯
   const isHost = roomInfo.hostId === currentUser?.uid;
 
   if (!isLoaded) return (
-    <div className="min-h-screen bg-[#070708] flex flex-col items-center justify-center text-lime-400">
-      <div className="w-16 h-16 border-2 border-lime-500 border-t-transparent rounded-full animate-spin mb-6"></div>
-      <p className="tracking-[0.4em] font-light text-sm uppercase animate-pulse">Initializing Vibe</p>
+    <div className="min-h-screen bg-[#020205] flex items-center justify-center">
+      <div className="text-indigo-400 font-light tracking-[1em] animate-pulse">連線中</div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-[#070708] text-white p-4 md:p-10 relative">
+    <div className="min-h-screen bg-[#05050a] bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-[#1a1a3a] via-[#05050a] to-black text-white p-4 md:p-10">
       
-      {/* 🧩 UI美感升級1：動態幾何背景 (使用SVG) */}
-      <div className="fixed inset-0 z-0 opacity-10">
-        <svg width="100%" height="100%">
-          <pattern id="pattern-hex" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse" viewBox="0 0 100 100">
-            <path d="M50 0 L100 25 L100 75 L50 100 L0 75 L0 25 Z" fill="none" stroke="white" strokeWidth="1"/>
-          </pattern>
-          <rect width="100%" height="100%" fill="url(#pattern-hex)" />
-        </svg>
-      </div>
-
-      <div className="max-w-7xl mx-auto relative z-10">
+      <div className="max-w-6xl mx-auto">
         {roomInfo.status === 'playing' && gameState?.board ? (
           <TicTacToe roomId={roomId} gameState={gameState} currentUser={currentUser} />
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-10">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 pt-4">
             
-            {/* 左側大廳 - 現代美感重新設計 */}
-            <div className="lg:col-span-8 bg-[#0d0d0f] border border-white/5 rounded-[3rem] p-10 shadow-2xl relative overflow-hidden group">
-              {/* 微妙的發光背景球 */}
-              <div className="absolute top-[-50%] left-[-20%] w-[80%] h-[80%] bg-lime-600/5 blur-[120px] rounded-full z-0 group-hover:bg-lime-600/10 transition-colors duration-500"></div>
-
-              <div className="flex justify-between items-center mb-10 relative z-10">
-                <div className="flex items-center gap-4">
-                  <div className="w-2 h-8 bg-lime-500 rounded-full shadow-[0_0_10px_#84cc16]"></div>
-                  <h2 className="text-4xl font-black bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent italic tracking-tighter">GAME DECK</h2>
+            {/* 左側大廳 - 超大圓角磨砂玻璃 */}
+            <div className="lg:col-span-7 bg-white/[0.03] border border-white/10 backdrop-blur-2xl rounded-[3.5rem] p-10 shadow-[0_20px_50px_rgba(0,0,0,0.3)]">
+              <div className="flex justify-between items-start mb-12">
+                <div>
+                  <h1 className="text-4xl font-black tracking-tight mb-2 italic">遊戲大廳</h1>
+                  <p className="text-white/20 text-xs tracking-widest uppercase font-bold">房號: {roomId}</p>
                 </div>
-                <div className="text-xs font-medium text-white/40 tracking-widest uppercase bg-white/5 px-4 py-2 rounded-full border border-white/10">
-                  Room: {roomId}
+                <div className="px-4 py-2 bg-white/5 border border-white/10 rounded-full text-[10px] font-bold text-white/40 tracking-widest">
+                  ONLINE: {Object.keys(players).length}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 relative z-10">
+              <div className="space-y-4">
                 {Object.values(players).map(p => (
-                  <div key={p.uid} className="flex justify-between items-center p-6 bg-[#121215] rounded-[2rem] border border-white/5 hover:border-lime-500/20 transition-colors duration-300">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center font-bold text-xl text-white/80">
-                        {p.displayName[0]}
+                  <div key={p.uid} className="flex justify-between items-center p-6 bg-white/[0.02] rounded-[2.5rem] border border-white/5 hover:bg-white/[0.05] transition-all duration-300">
+                    <div className="flex items-center gap-5">
+                      <div className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-xl shadow-inner">
+                        👤
                       </div>
                       <div>
-                        <span className="font-semibold text-white/90">{p.displayName}</span>
-                        {p.uid === roomInfo.hostId && <span className="block text-xs text-lime-400/70 font-bold uppercase tracking-widest">HOST</span>}
+                        <span className="text-lg font-bold block">{p.displayName}</span>
+                        {p.uid === roomInfo.hostId && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded-full font-black tracking-widest uppercase">房長 👑</span>}
                       </div>
                     </div>
-                    <div className={`w-3.5 h-3.5 rounded-full border-2 ${p.isReady ? 'bg-lime-400 border-lime-400 shadow-[0_0_15px_#84cc16]' : 'bg-transparent border-white/20'}`} />
+                    <div className={`w-3.5 h-3.5 rounded-full ${p.isReady ? 'bg-indigo-400 shadow-[0_0_20px_rgba(99,102,241,0.8)]' : 'bg-white/10'}`} />
                   </div>
                 ))}
               </div>
 
-              <div className="mt-12 flex gap-4 relative z-10">
+              <div className="mt-12 flex gap-4">
                 <button 
                   onClick={() => update(ref(database, `rooms/${roomId}/players/${currentUser.uid}`), { isReady: !players[currentUser.uid]?.isReady })}
-                  className="flex-1 py-6 bg-white/[0.04] hover:bg-white/[0.08] rounded-[2rem] font-bold border border-white/10 transition-all duration-300 hover:scale-[1.01]"
+                  className="flex-1 py-6 bg-white/5 hover:bg-white/10 rounded-[2.5rem] font-bold border border-white/10 transition-all active:scale-95"
                 >
-                  {players[currentUser?.uid]?.isReady ? 'READY!' : 'PREPARE'}
+                  {players[currentUser?.uid]?.isReady ? '取消準備' : '準備好了'}
                 </button>
-                {/* 🧩 UI美感升級2：開始按鈕重新設計 */}
+                
+                {/* 👑 確定會出現的開始按鈕 */}
                 {isHost && (
-                  <button onClick={handleStart} className="flex-1 py-6 bg-lime-500 text-black rounded-[2rem] font-black shadow-[0_0_40px_rgba(132,204,22,0.4)] hover:bg-lime-400 transition-all duration-300 hover:scale-[1.01] uppercase tracking-tighter">
-                    Start Mission
+                  <button 
+                    onClick={handleStart}
+                    className="flex-1 py-6 bg-white text-black rounded-[2.5rem] font-black shadow-[0_15px_40px_rgba(255,255,255,0.15)] hover:bg-indigo-50 transition-all active:scale-95 text-lg"
+                  >
+                    開始遊戲
                   </button>
                 )}
               </div>
             </div>
 
-            {/* 右側聊天室 - 聊天對象區分 */}
-            <div className="lg:col-span-4 bg-[#0d0d0f] border border-white/5 rounded-[3rem] p-8 flex flex-col h-[650px] shadow-2xl relative overflow-hidden">
-              <h3 className="text-xl font-bold mb-6 tracking-tight text-white/90">COMMS CHANNEL</h3>
+            {/* 右側聊天室 - 區分發言對象 */}
+            <div className="lg:col-span-5 bg-white/[0.03] border border-white/10 backdrop-blur-2xl rounded-[3.5rem] p-8 flex flex-col h-[650px] shadow-2xl overflow-hidden">
+              <h3 className="text-xl font-black mb-8 text-white/60 tracking-tighter">聊天頻道</h3>
               <div className="flex-1 overflow-y-auto space-y-5 mb-6 pr-2 scrollbar-hide">
                 {messages.map((m, i) => {
                   const isMe = m.senderId === currentUser?.uid;
                   return (
-                    <div key={i} className={`flex gap-3 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
-                      <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-xs text-white/60 flex-shrink-0 mt-1">
-                        {m.senderName[0]}
-                      </div>
-                      <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                        {!isMe && <span className="text-[11px] text-white/30 ml-2 mb-1">{m.senderName}</span>}
-                        <div className={`px-5 py-3 rounded-2xl text-sm leading-relaxed ${isMe ? 'bg-lime-950 text-lime-100 rounded-tr-none border border-lime-800/50' : 'bg-white/5 border border-white/5 rounded-tl-none'}`}>
-                          {m.text}
-                        </div>
+                    <div key={i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      {!isMe && <span className="text-[10px] text-white/20 ml-3 mb-1 font-bold">{m.senderName}</span>}
+                      <div className={`px-5 py-3 rounded-[1.8rem] text-sm leading-relaxed max-w-[85%] ${isMe ? 'bg-indigo-600 rounded-tr-none' : 'bg-white/5 rounded-tl-none border border-white/5'}`}>
+                        {m.text}
                       </div>
                     </div>
                   );
@@ -186,10 +164,10 @@ export default function RoomWaitingArea({ roomId = "1234" }) {
                 <input 
                   value={chatInput} 
                   onChange={e => setChatInput(e.target.value)} 
-                  className="w-full bg-[#121215] border border-white/5 rounded-3xl py-5 pl-6 pr-16 outline-none focus:border-lime-500/40 transition-all placeholder:text-white/10" 
-                  placeholder="Transmit message..." 
+                  className="w-full bg-white/5 border border-white/10 rounded-[2rem] py-5 px-6 outline-none focus:border-indigo-500/50 placeholder:text-white/10" 
+                  placeholder="輸入訊息..." 
                 />
-                <button className="absolute right-3 top-2.5 bottom-2.5 px-6 bg-lime-500 rounded-2xl hover:bg-lime-400 transition-all font-bold text-black text-xs uppercase">SEND</button>
+                <button className="absolute right-3 top-2.5 bottom-2.5 px-6 bg-white/10 hover:bg-white/20 rounded-2xl transition-all font-bold text-xs uppercase">傳送</button>
               </form>
             </div>
           </div>
