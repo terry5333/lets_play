@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { ref, push, update, increment } from 'firebase/database';
 import { database } from '../lib/firebaseConfig';
 
-// 💎 高級卡牌視覺字典 (將 attack 替換為 甩鍋)
 const CARD_DIC = {
   defuse: { icon: '🔧', name: '拆除卡', theme: 'emerald', grad: 'from-[#065f46] via-[#10b981] to-[#059669]', glow: 'shadow-[0_0_30px_rgba(16,185,129,0.5)]', desc: '避免被炸死，並重置炸彈位置。' },
   skip: { icon: '⏭️', name: '跳過卡', theme: 'blue', grad: 'from-[#1e3a8a] via-[#3b82f6] to-[#2563eb]', glow: 'shadow-[0_0_30px_rgba(59,130,246,0.5)]', desc: '不抽牌直接結束回合。' },
@@ -50,31 +49,33 @@ const PlayingCard = ({ cardId, isMyTurn, idx, onClick, isTargeting }) => {
 export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
   const [chatInput, setChatInput] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [buckTargetIdx, setBuckTargetIdx] = useState(null); // 🎯 紀錄準備打出的甩鍋卡索引
+  const [buckTargetIdx, setBuckTargetIdx] = useState(null);
 
   const gameState = roomData?.gameState;
+  // 🛡️ 防護 1：嚴格檢查 gameState 是否存在
   if (!gameState) return <div className="min-h-screen bg-[#070709] text-white flex items-center justify-center font-mono tracking-widest text-sm"><div className="animate-pulse">LOADING VIBE...</div></div>;
 
-  const myHand = gameState.hands?.[user.uid] || [];
-  const isMyTurn = gameState.currentTurn === user.uid;
-  const isAlive = gameState.alivePlayers?.includes(user.uid);
-  const deckCount = gameState.deck ? gameState.deck.length : 0;
-  const lastDiscard = gameState.discardPile?.[gameState.discardPile.length - 1];
+  // 🛡️ 防護 2：使用 Optional Chaining (?.) 確保資料空窗期不會當機
+  const myHand = gameState?.hands?.[user?.uid] || [];
+  const isMyTurn = gameState?.currentTurn === user?.uid;
+  const isAlive = gameState?.alivePlayers?.includes(user?.uid) || false;
+  const deckCount = gameState?.deck?.length || 0;
+  const lastDiscard = gameState?.discardPile?.[(gameState?.discardPile?.length || 1) - 1];
 
   const getNextPlayer = (aliveList) => {
-    const currentIndex = aliveList.indexOf(gameState.currentTurn);
+    if (!aliveList || aliveList.length === 0) return null;
+    const currentIndex = aliveList.indexOf(gameState?.currentTurn);
     const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % aliveList.length : 0;
     return aliveList[nextIndex];
   };
 
-  // 🃏 摸牌引擎 (包含歸還回合邏輯)
   const drawCard = () => {
     if (!isMyTurn || !isAlive || buckTargetIdx !== null) return;
     
     const updates = {};
     let newDeck = [...(gameState.deck || [])];
     let newHand = [...myHand];
-    let newAlive = [...gameState.alivePlayers];
+    let newAlive = [...(gameState.alivePlayers || [])];
     let newCurrentTurn = gameState.currentTurn;
     let newTurnActionsCount = gameState.turnActionsCount || 1;
     let newDiscard = [...(gameState.discardPile || [])];
@@ -91,10 +92,10 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         newDiscard.push('defuse');
         const insertAt = Math.floor(Math.random() * (newDeck.length + 1));
         newDeck.splice(insertAt, 0, 'bomb');
-        push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🔧 ${user.displayName} 驚險拆除了炸彈！`, timestamp: Date.now() });
+        push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `🔧 ${user?.displayName} 驚險拆除了炸彈！`, timestamp: Date.now() });
       } else {
-        newAlive = newAlive.filter(uid => uid !== user.uid);
-        push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `💥 ${user.displayName} 被炸死了！`, timestamp: Date.now() });
+        newAlive = newAlive.filter(uid => uid !== user?.uid);
+        push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: `💥 ${user?.displayName} 被炸死了！`, timestamp: Date.now() });
         if (newAlive.length === 1) {
           updates[`users/${newAlive[0]}/score`] = increment(100); 
           updates[`rooms/${roomId}/info/status`] = 'waiting'; 
@@ -106,32 +107,29 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
       newTurnActionsCount--;
     }
 
-    // 🎯 檢查是否是被甩鍋的強制回合
     if (newReturnTurn) {
-      newCurrentTurn = newReturnTurn; // 還給原主人
-      newReturnTurn = null;           // 結案
+      newCurrentTurn = newReturnTurn; 
+      newReturnTurn = null;           
     } else if (newAlive.length > 1 && (newTurnActionsCount <= 0 || drawnCard === 'bomb')) {
       newCurrentTurn = getNextPlayer(newAlive);
       newTurnActionsCount = 1;
     }
 
     updates[`rooms/${roomId}/gameState/deck`] = newDeck;
-    updates[`rooms/${roomId}/gameState/hands/${user.uid}`] = newHand;
+    updates[`rooms/${roomId}/gameState/hands/${user?.uid}`] = newHand;
     updates[`rooms/${roomId}/gameState/alivePlayers`] = newAlive;
     updates[`rooms/${roomId}/gameState/currentTurn`] = newCurrentTurn;
     updates[`rooms/${roomId}/gameState/turnActionsCount`] = newTurnActionsCount;
     updates[`rooms/${roomId}/gameState/discardPile`] = newDiscard;
-    updates[`rooms/${roomId}/gameState/returnTurn`] = newReturnTurn; // 更新歸還狀態
+    updates[`rooms/${roomId}/gameState/returnTurn`] = newReturnTurn; 
 
     update(ref(database), updates);
   };
 
-  // ⚔️ 出牌引擎 (支援甩鍋點選目標)
   const playCard = (cardIdx, targetUid = null) => {
     if (!isMyTurn || !isAlive) return;
     const cardId = myHand[cardIdx];
     
-    // 如果是甩鍋，但還沒選擇目標，進入瞄準模式
     if (cardId === 'attack' && !targetUid) {
       setBuckTargetIdx(cardIdx);
       return;
@@ -146,7 +144,7 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
     let newReturnTurn = gameState.returnTurn || null;
     const updates = {};
 
-    let actionMsg = `${user.displayName} 打出了 ${CARD_DIC[cardId].name}`;
+    let actionMsg = `${user?.displayName} 打出了 ${CARD_DIC[cardId]?.name}`;
 
     switch (cardId) {
       case 'shuffle':
@@ -157,7 +155,7 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         break;
       
       case 'see':
-        const top3 = newDeck.slice(-3).reverse().map(c => CARD_DIC[c].name).join('、');
+        const top3 = newDeck.slice(-3).reverse().map(c => CARD_DIC[c]?.name).join('、');
         alert(`👁️ 未來的 3 張牌是：\n${top3 || '沒有足夠的牌了'}`);
         break;
       
@@ -165,11 +163,10 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         newTurnActionsCount--;
         break;
       
-      case 'attack': // 🍳 甩鍋邏輯
+      case 'attack': 
         newCurrentTurn = targetUid;
-        // 如果這個回合本來就是被甩鍋來的，或者是自己的，把歸還權指向「發動甩鍋的人 (user.uid)」
-        newReturnTurn = newReturnTurn || user.uid; 
-        actionMsg = `🍳 ${user.displayName} 把鍋甩給了 ${roomData.players[targetUid].name}！`;
+        newReturnTurn = newReturnTurn || user?.uid; 
+        actionMsg = `🍳 ${user?.displayName} 把鍋甩給了 ${roomData?.players?.[targetUid]?.name}！`;
         break;
       
       case 'favor':
@@ -185,19 +182,17 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         break;
     }
 
-    // 🎯 只要不是甩鍋，出牌即視為消耗了強制動作，歸還回合
     if (newReturnTurn && cardId !== 'attack') {
       newCurrentTurn = newReturnTurn;
       newReturnTurn = null;
     } else if (newTurnActionsCount <= 0 && cardId !== 'attack') {
-      // 正常回合切換
       newCurrentTurn = getNextPlayer(gameState.alivePlayers);
       newTurnActionsCount = 1;
     }
 
     push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: actionMsg, timestamp: Date.now() });
 
-    updates[`rooms/${roomId}/gameState/hands/${user.uid}`] = newHand;
+    updates[`rooms/${roomId}/gameState/hands/${user?.uid}`] = newHand;
     updates[`rooms/${roomId}/gameState/discardPile`] = newDiscard;
     updates[`rooms/${roomId}/gameState/deck`] = newDeck;
     updates[`rooms/${roomId}/gameState/currentTurn`] = newCurrentTurn;
@@ -210,17 +205,16 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-    push(ref(database, `rooms/${roomId}/chat`), { senderId: user.uid, senderName: user.displayName, avatar: user.photoURL || '', text: chatInput, timestamp: Date.now() });
+    push(ref(database, `rooms/${roomId}/chat`), { senderId: user?.uid, senderName: user?.displayName, avatar: user?.photoURL || '', text: chatInput, timestamp: Date.now() });
     setChatInput('');
   };
 
-  // 決定狀態列顯示的文字
   let statusText = '激戰中';
   if (!isAlive) statusText = '👻 你已成為鬼魂';
   else if (isMyTurn) {
-    if (gameState.returnTurn) statusText = '⚠️ 被甩鍋！請出一張牌或摸牌';
-    else statusText = `你的回合 (需摸 ${gameState.turnActionsCount} 張)`;
-  } else if (gameState.returnTurn === user.uid) {
+    if (gameState?.returnTurn) statusText = '⚠️ 被甩鍋！請出一張牌或摸牌';
+    else statusText = `你的回合 (需摸 ${gameState?.turnActionsCount || 1} 張)`;
+  } else if (gameState?.returnTurn === user?.uid) {
     statusText = '等待甩鍋結果...';
   }
 
@@ -237,8 +231,8 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
           <span className="mr-2 text-xl font-black group-hover:-translate-x-1 transition-transform">←</span>
           <span className="font-mono font-bold tracking-wider text-sm">{roomId}</span>
         </button>
-        <div className={`px-6 py-2 rounded-full border shadow-lg transition-colors duration-500 ${isMyTurn && isAlive ? (gameState.returnTurn ? 'bg-rose-500/20 border-rose-400/50 shadow-[0_0_20px_rgba(225,29,72,0.4)]' : 'bg-yellow-500/20 border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.3)]') : 'bg-gradient-to-r from-purple-600 to-indigo-600 border-purple-400/30 shadow-[0_0_20px_rgba(147,51,234,0.3)]'}`}>
-          <span className={`font-extrabold tracking-widest text-xs drop-shadow-md transition-colors duration-500 ${isMyTurn && isAlive ? (gameState.returnTurn ? 'text-rose-400' : 'text-yellow-400') : 'text-white'}`}>
+        <div className={`px-6 py-2 rounded-full border shadow-lg transition-colors duration-500 ${isMyTurn && isAlive ? (gameState?.returnTurn ? 'bg-rose-500/20 border-rose-400/50 shadow-[0_0_20px_rgba(225,29,72,0.4)]' : 'bg-yellow-500/20 border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.3)]') : 'bg-gradient-to-r from-purple-600 to-indigo-600 border-purple-400/30 shadow-[0_0_20px_rgba(147,51,234,0.3)]'}`}>
+          <span className={`font-extrabold tracking-widest text-xs drop-shadow-md transition-colors duration-500 ${isMyTurn && isAlive ? (gameState?.returnTurn ? 'text-rose-400' : 'text-yellow-400') : 'text-white'}`}>
             {statusText}
           </span>
         </div>
@@ -247,14 +241,14 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         </div>
       </div>
 
-      {/* 頂部對手列表 (🎯 甩鍋瞄準模式) */}
+      {/* 🛡️ 防護 3：渲染對手列表時，確保 roomData.players 存在且 safely map */}
       <div className="flex justify-center gap-6 md:gap-12 mt-2 z-10 px-4">
-        {roomData.players && Object.keys(roomData.players).filter(uid => uid !== user.uid).map(uid => {
+        {roomData?.players && Object.keys(roomData.players).filter(uid => uid !== user?.uid).map(uid => {
           const p = roomData.players[uid];
-          const isOpponentAlive = gameState.alivePlayers?.includes(uid);
-          const handCount = gameState.hands?.[uid]?.length || 0;
-          const isOpponentTurn = gameState.currentTurn === uid && isOpponentAlive;
-          const isTargetable = buckTargetIdx !== null && isOpponentAlive; // 🎯 判斷是否可被選中
+          const isOpponentAlive = gameState?.alivePlayers?.includes(uid);
+          const handCount = gameState?.hands?.[uid]?.length || 0;
+          const isOpponentTurn = gameState?.currentTurn === uid && isOpponentAlive;
+          const isTargetable = buckTargetIdx !== null && isOpponentAlive; 
           
           return (
             <div 
@@ -279,7 +273,6 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center relative z-10 px-4">
-        {/* 🎯 甩鍋提示字眼 */}
         <div className="mb-6 h-10 transition-opacity duration-300 flex flex-col items-center">
           {buckTargetIdx !== null ? (
             <>
@@ -295,7 +288,7 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
           <div className="relative group cursor-pointer" onClick={drawCard}>
             <div className={`absolute -left-12 top-6 rounded-full p-2 border-4 z-20 flex flex-col items-center transform -rotate-12 group-hover:rotate-0 transition-all duration-300 bg-white border-slate-100 shadow-[0_10px_20px_rgba(0,0,0,0.3)]`}>
               <span className="text-rose-500 font-extrabold text-[11px] whitespace-nowrap">爆炸率</span>
-              <span className="text-rose-600 font-black text-lg font-mono">{Math.round(((gameState.alivePlayers.length - 1) / (deckCount || 1)) * 100) || 0}%</span>
+              <span className="text-rose-600 font-black text-lg font-mono">{Math.round((((gameState?.alivePlayers?.length || 1) - 1) / (deckCount || 1)) * 100) || 0}%</span>
             </div>
             <div className={`w-36 h-48 md:w-44 md:h-60 rounded-[2.5rem] border-4 flex flex-col items-center justify-center p-4 transition-all duration-300 bg-gradient-to-br from-orange-50 via-orange-200 to-orange-400 border-orange-300 shadow-[0_15px_30px_rgba(0,0,0,0.6)] ${isMyTurn && isAlive ? 'hover:scale-105 shadow-[0_0_30px_rgba(250,204,21,0.3)] border-yellow-300' : ''}`}>
               <div className="text-6xl md:text-7xl mb-3 drop-shadow-[0_5px_10px_rgba(0,0,0,0.3)]">🐈‍⬛💣</div>
@@ -304,12 +297,12 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
           </div>
           
           <div className={`w-36 h-48 md:w-44 md:h-60 backdrop-blur-md rounded-[2.5rem] border-4 flex flex-col items-center justify-center p-4 relative overflow-hidden group transition-all duration-300 bg-white/5 border-white/10 shadow-[0_15px_30px_rgba(0,0,0,0.4)]`}>
-             {lastDiscard && lastDiscard !== 'start' ? (
+             {lastDiscard && lastDiscard !== 'start' && CARD_DIC[lastDiscard] ? (
                 <>
                   <div className="absolute top-4 left-5 flex items-center gap-1.5 font-extrabold text-sm text-white/60">
-                    <span>{CARD_DIC[lastDiscard]?.icon}</span>{CARD_DIC[lastDiscard]?.name}
+                    <span>{CARD_DIC[lastDiscard].icon}</span>{CARD_DIC[lastDiscard].name}
                   </div>
-                  <div className="text-7xl md:text-8xl mt-4 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] group-hover:scale-110 transition-transform">{CARD_DIC[lastDiscard]?.icon}</div>
+                  <div className="text-7xl md:text-8xl mt-4 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] group-hover:scale-110 transition-transform">{CARD_DIC[lastDiscard].icon}</div>
                 </>
              ) : (
                 <div className="text-white/20 font-bold text-sm tracking-widest uppercase">棄牌堆</div>
@@ -343,7 +336,6 @@ export default function BoomCat({ user, roomId, roomData, handleLeaveRoom }) {
         <button onClick={() => setIsChatOpen(!isChatOpen)} className={`absolute right-6 bottom-8 w-14 h-14 rounded-full flex items-center justify-center text-2xl border transition-all duration-300 z-20 bg-purple-600/80 border-purple-400/50 shadow-lg hover:bg-purple-500 active:scale-95`}>💬</button>
       </div>
 
-      {/* 聊天室維持不變 */}
       <div className={`fixed top-0 right-0 h-full w-full md:w-[400px] bg-[#120726]/95 backdrop-blur-3xl shadow-2xl border-l border-white/10 z-50 transform transition-transform duration-300 ease-in-out ${isChatOpen ? 'translate-x-0' : 'translate-x-full'} flex flex-col`}>
         <div className="p-6 flex justify-between items-center border-b border-white/10">
           <h3 className="font-bold tracking-widest uppercase">Room Chat</h3>
