@@ -17,8 +17,15 @@ export default function Lobby({
   useEffect(() => {
     const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
     const ADMIN_EMAILS = adminEmailsString.split(',').map(email => email.trim().toLowerCase());
-    if (user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())) {
-      setIsAdmin(true);
+    // Lobby.jsx
+{isAdmin && (
+  <button 
+    onClick={() => window.location.href = '/admin'} 
+    className="text-[10px] font-black text-rose-500 hover:text-rose-400 transition-all mr-2 border border-rose-500/30 px-3 py-1.5 rounded-full bg-rose-500/10 active:scale-95"
+  >
+    ⚙️ 系統後台
+  </button>
+)}
     }
   }, [user]);
 
