@@ -27,30 +27,51 @@ export default function GamePlatform() {
   const [roomData, setRoomData] = useState(null);
   const [chatInput, setChatInput] = useState('');
   
-  // 🏆 排行榜狀態
   const [leaderboard, setLeaderboard] = useState([]);
+  const [myScore, setMyScore] = useState(0); // 🏆 新增：專屬個人積分狀態
 
   // ==========================================
   // 1. 生命週期與全域資料同步
   // ==========================================
   useEffect(() => {
+    let userScoreUnsub; // 用來清理個人積分的監聽器
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        setUser(currentUser);
         
-        // 🛠️ 同步使用者的公開資料到資料庫，讓排行榜抓得到
+        // 🚀 1. 每次進入系統，強制擷取並升級頭像
+        let activeAvatar = currentUser.photoURL;
+        const googleData = currentUser.providerData.find(p => p.providerId === 'google.com');
+        if (googleData && googleData.photoURL) {
+          activeAvatar = googleData.photoURL.replace('=s96-c', '=s400-c'); // 強制轉高清
+          if (currentUser.photoURL !== activeAvatar) {
+            await updateProfile(currentUser, { photoURL: activeAvatar });
+          }
+        }
+        // 如果連 Google 都沒有，給預設的 Micah 頭像
+        if (!activeAvatar) activeAvatar = `https://api.dicebear.com/7.x/micah/svg?seed=${currentUser.uid}&backgroundColor=transparent`;
+
+        // 更新前端的 user 狀態
+        setUser({ ...currentUser, photoURL: activeAvatar });
+        
+        // 🚀 2. 同步到資料庫，並設定專屬分數監聽
         const userRef = ref(database, `users/${currentUser.uid}`);
         const userSnap = await get(userRef);
         const userData = userSnap.val() || {};
         
         const updates = {
           name: currentUser.displayName || '無名氏',
-          avatar: currentUser.photoURL || `https://api.dicebear.com/7.x/micah/svg?seed=${currentUser.uid}&backgroundColor=transparent`
+          avatar: activeAvatar // 每次都把最新頭像寫入資料庫
         };
-        // 如果是新玩家，給他初始積分 0
         if (userData.score === undefined) updates.score = 0;
         await update(userRef, updates);
 
+        // 獨立監聽我自己的分數，確保 PTS 隨時跳動
+        userScoreUnsub = onValue(userRef, (snap) => {
+          if (snap.exists()) setMyScore(snap.val().score || 0);
+        });
+
+        // 🚀 3. 處理房間鎖定邏輯
         const activeRoom = userData.currentRoom;
         if (activeRoom) {
           setRoomId(activeRoom);
@@ -61,19 +82,23 @@ export default function GamePlatform() {
       } else {
         setUser(null);
         setView('login');
+        if (userScoreUnsub) userScoreUnsub();
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribe();
+      if (userScoreUnsub) userScoreUnsub();
+    };
   }, []);
 
-  // 監聽排行榜資料 (只在大廳抓取前 10 名)
+  // 監聽排行榜資料
   useEffect(() => {
     if (view === 'lobby') {
       const topUsersQuery = query(ref(database, 'users'), orderByChild('score'), limitToLast(10));
       const unsub = onValue(topUsersQuery, (snapshot) => {
         const data = snapshot.val();
         if (data) {
-          // 將物件轉為陣列，過濾掉沒有分數的，並由高到低排序
           const sortedList = Object.values(data)
             .filter(u => u.score !== undefined)
             .sort((a, b) => b.score - a.score);
@@ -92,6 +117,7 @@ export default function GamePlatform() {
       
       onDisconnect(myPlayerRef).remove();
 
+      // 確保進入房間時，帶入的是最新鮮的頭像
       set(myPlayerRef, {
         uid: user.uid,
         name: user.displayName || '無名氏',
@@ -150,33 +176,16 @@ export default function GamePlatform() {
     } catch (err) { alert("驗證失敗: " + err.message); }
   };
 
-  const extractAndUpgradeGoogleAvatar = async (currentUser) => {
-    const googleData = currentUser.providerData.find(p => p.providerId === 'google.com');
-    if (googleData && googleData.photoURL) {
-      const hdPhoto = googleData.photoURL.replace('=s96-c', '=s400-c');
-      if (currentUser.photoURL !== hdPhoto) {
-        await updateProfile(currentUser, { photoURL: hdPhoto });
-        return { ...currentUser, photoURL: hdPhoto };
-      }
-    }
-    return currentUser;
-  };
-
   const handleGoogleLogin = async () => {
-    try { 
-      const res = await signInWithPopup(auth, googleProvider); 
-      const upgradedUser = await extractAndUpgradeGoogleAvatar(res.user);
-      setUser(upgradedUser);
-    } 
+    try { await signInWithPopup(auth, googleProvider); } 
     catch (err) { alert("Google 登入失敗: " + err.message); }
   };
 
   const handleLinkGoogle = async () => {
     try {
       const result = await linkWithPopup(auth.currentUser, googleProvider);
-      const upgradedUser = await extractAndUpgradeGoogleAvatar(result.user);
-      setUser(upgradedUser); 
-      alert("✅ 成功綁定 Google 帳號！頭像已自動同步。");
+      alert("✅ 成功綁定 Google 帳號！頁面將重新整理以套用頭像。");
+      window.location.reload(); // 綁定後直接重整，讓頂部的 useEffect 自動抓新頭像
     } catch (err) { alert("綁定失敗: " + err.message); }
   };
 
@@ -187,24 +196,18 @@ export default function GamePlatform() {
     const newAvatar = `https://api.dicebear.com/7.x/micah/svg?seed=${randomSeed}&backgroundColor=transparent`;
     await updateProfile(user, { photoURL: newAvatar });
     setUser({ ...user, photoURL: newAvatar });
-    update(ref(database, `users/${user.uid}`), { avatar: newAvatar }); // 同步到資料庫
+    update(ref(database, `users/${user.uid}`), { avatar: newAvatar });
   };
 
-  // 🏆 測試按鈕：模擬贏得比賽加分
   const handleWinGameDemo = () => {
     update(ref(database, `users/${user.uid}`), { score: increment(50) });
   };
 
-  // ==========================================
-  // 3. 房間操作邏輯
-  // ==========================================
   const handleCreateRoom = () => {
     const newRoomId = Math.floor(1000 + Math.random() * 9000).toString();
     const updates = {};
     updates[`rooms/${newRoomId}/info`] = { hostId: user.uid, status: 'waiting' };
-    updates[`rooms/${newRoomId}/players/${user.uid}`] = { 
-      uid: user.uid, name: user.displayName || '無名氏', avatar: user.photoURL || '', joinedAt: serverTimestamp() 
-    };
+    updates[`rooms/${newRoomId}/players/${user.uid}`] = { uid: user.uid, name: user.displayName || '無名氏', avatar: user.photoURL || '', joinedAt: serverTimestamp() };
     updates[`users/${user.uid}/currentRoom`] = newRoomId;
     update(ref(database), updates).then(() => { setRoomId(newRoomId); setView('room'); });
   };
@@ -216,9 +219,7 @@ export default function GamePlatform() {
     if (!roomSnap.exists()) return alert("找不到房間！");
     
     const updates = {};
-    updates[`rooms/${joinInput}/players/${user.uid}`] = { 
-      uid: user.uid, name: user.displayName || '無名氏', avatar: user.photoURL || '', joinedAt: serverTimestamp() 
-    };
+    updates[`rooms/${joinInput}/players/${user.uid}`] = { uid: user.uid, name: user.displayName || '無名氏', avatar: user.photoURL || '', joinedAt: serverTimestamp() };
     updates[`users/${user.uid}/currentRoom`] = joinInput;
     update(ref(database), updates).then(() => { setRoomId(joinInput); setJoinInput(''); setView('room'); });
   };
@@ -250,8 +251,10 @@ export default function GamePlatform() {
     setChatInput('');
   };
 
+  const isHost = roomData?.info?.hostId === user?.uid;
+
   // ==========================================
-  // 4. UI 渲染 (Apple Vision Pro Style)
+  // 3. 空間運算風 UI
   // ==========================================
 
   const AmbientBackground = () => (
@@ -272,13 +275,14 @@ export default function GamePlatform() {
       <div className="vibe-font min-h-screen text-white relative selection:bg-white/20">
         <AmbientBackground />
 
+        {/* 🟡 狀態：Loading */}
         {view === 'loading' && (
           <div className="h-screen flex items-center justify-center relative z-10">
             <div className="animate-pulse font-light text-white/70 tracking-[0.5em] text-sm">SYNCING VIBE...</div>
           </div>
         )}
 
-        {/* 登入畫面保持不變... */}
+        {/* 🟢 狀態：Login */}
         {view === 'login' && (
           <div className="h-screen flex items-center justify-center p-6 relative z-10">
             <div className="w-full max-w-md bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-[0_8px_40px_rgba(0,0,0,0.5)] rounded-[3rem] p-10 md:p-14">
@@ -323,6 +327,7 @@ export default function GamePlatform() {
           </div>
         )}
 
+        {/* 🔵 狀態：Lobby */}
         {view === 'lobby' && (
           <div className="min-h-screen flex flex-col p-6 md:p-12 relative z-10">
             <div className="w-full max-w-6xl mx-auto flex justify-between items-center mb-12 px-4">
@@ -330,22 +335,22 @@ export default function GamePlatform() {
               
               <div className="flex items-center gap-3 bg-white/[0.03] backdrop-blur-xl border border-white/10 p-2 pr-6 rounded-full shadow-lg">
                 <button onClick={changeAvatar} title="點擊更換頭像" className="relative group w-10 h-10 rounded-full bg-white/5 border border-white/10 overflow-hidden hover:border-white/40 transition-all cursor-pointer">
-                  <img src={user?.photoURL || `https://api.dicebear.com/7.x/micah/svg?seed=${user?.uid}`} alt="avatar" className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                  <img src={user?.photoURL} alt="avatar" className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
                   <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-[10px]">更換</div>
                 </button>
                 <div className="flex flex-col justify-center">
                   <span className="text-sm font-medium opacity-90 leading-tight">{user?.displayName || '無名氏'}</span>
                   <div className="flex items-center gap-2 mt-0.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></div>
-                    <span className="text-[9px] text-white/40 tracking-widest uppercase font-mono">PTS: {leaderboard.find(u => u.uid === user.uid)?.score || 0}</span>
+                    {/* 🏆 修改點：使用專屬的 myScore 狀態，反應超即時 */}
+                    <span className="text-[10px] text-white/50 tracking-widest uppercase font-mono">PTS: <span className="text-white/90 font-bold">{myScore}</span></span>
                   </div>
                 </div>
                 
                 <div className="h-6 w-px bg-white/10 mx-2"></div>
                 
-                {/* 🏆 測試按鈕：模擬贏得比賽 */}
-                <button onClick={handleWinGameDemo} className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors mr-2 border border-emerald-500/30 px-3 py-1.5 rounded-full bg-emerald-500/10">
-                  測試贏得比賽 (+50)
+                <button onClick={handleWinGameDemo} className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors mr-2 border border-emerald-500/30 px-3 py-1.5 rounded-full bg-emerald-500/10 active:scale-95">
+                  加分測試 (+50)
                 </button>
 
                 {!isGoogleLinked && (
@@ -355,7 +360,6 @@ export default function GamePlatform() {
               </div>
             </div>
             
-            {/* 上半部：包廂操作區 */}
             <div className="w-full max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
               <button onClick={handleCreateRoom} className="group bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-12 text-left hover:bg-white/[0.04] transition-all duration-500 overflow-hidden relative">
                 <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mr-10 -mt-10 group-hover:bg-white/10 transition-colors"></div>
@@ -375,30 +379,21 @@ export default function GamePlatform() {
               </div>
             </div>
 
-            {/* 下半部：🏆 殿堂級排行榜 */}
             <div className="w-full max-w-6xl mx-auto bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-10 mt-4 relative overflow-hidden">
               <div className="absolute -top-32 -right-32 w-96 h-96 bg-yellow-500/10 blur-[100px] rounded-full mix-blend-screen pointer-events-none"></div>
-              
               <div className="flex items-center justify-between mb-8 relative z-10">
                 <div>
                   <h2 className="text-2xl font-semibold tracking-tight">全服排行榜</h2>
                   <p className="text-white/30 text-[10px] tracking-widest uppercase mt-1">Hall of Fame</p>
                 </div>
-                <div className="px-4 py-2 bg-white/5 border border-white/10 rounded-full text-xs font-mono text-white/50">
-                  TOP 10 PLAYERS
-                </div>
+                <div className="px-4 py-2 bg-white/5 border border-white/10 rounded-full text-xs font-mono text-white/50">TOP 10</div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 relative z-10">
-                {leaderboard.length === 0 && <div className="text-white/30 text-sm p-4">目前還沒有玩家上榜，快去贏得第一場比賽！</div>}
+                {leaderboard.length === 0 && <div className="text-white/30 text-sm p-4">目前還沒有玩家上榜！</div>}
                 {leaderboard.map((p, index) => {
-                  // 前三名專屬光效
-                  const isTop1 = index === 0;
-                  const isTop2 = index === 1;
-                  const isTop3 = index === 2;
-                  let borderGlow = "border-white/[0.05]";
-                  let textGlow = "text-white/80";
-                  
+                  const isTop1 = index === 0, isTop2 = index === 1, isTop3 = index === 2;
+                  let borderGlow = "border-white/[0.05]", textGlow = "text-white/80";
                   if (isTop1) { borderGlow = "border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.2)] bg-yellow-500/5"; textGlow = "text-yellow-400 font-bold"; }
                   else if (isTop2) { borderGlow = "border-slate-300/50 shadow-[0_0_15px_rgba(203,213,225,0.1)] bg-slate-400/5"; textGlow = "text-slate-300 font-bold"; }
                   else if (isTop3) { borderGlow = "border-orange-400/50 shadow-[0_0_15px_rgba(251,146,60,0.1)] bg-orange-500/5"; textGlow = "text-orange-400 font-bold"; }
@@ -411,9 +406,7 @@ export default function GamePlatform() {
                       </div>
                       <div className="flex flex-col truncate">
                         <span className="text-sm font-medium truncate">{p.name}</span>
-                        <span className={`text-[11px] tracking-widest uppercase font-mono mt-0.5 ${textGlow}`}>
-                          {p.score} PTS
-                        </span>
+                        <span className={`text-[11px] tracking-widest uppercase font-mono mt-0.5 ${textGlow}`}>{p.score} PTS</span>
                       </div>
                     </div>
                   );
@@ -423,11 +416,10 @@ export default function GamePlatform() {
           </div>
         )}
 
+        {/* 🟣 狀態：Room */}
         {view === 'room' && (
           <div className="min-h-screen p-4 md:p-10 relative z-10">
             <div className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-8 h-[85vh]">
-              
-              {/* 左側：玩家名單 */}
               <div className="flex-1 bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-10 flex flex-col">
                 <div className="flex justify-between items-center mb-12">
                   <div>
@@ -461,7 +453,6 @@ export default function GamePlatform() {
                 </div>
               </div>
 
-              {/* 右側：聊天室 */}
               <div className="w-full lg:w-[420px] bg-white/[0.02] backdrop-blur-[40px] border border-white/[0.08] shadow-2xl rounded-[3rem] p-8 flex flex-col">
                 <h3 className="text-[11px] font-medium mb-8 text-white/40 tracking-widest uppercase">Live Chat</h3>
                 <div className="flex-1 overflow-y-auto space-y-6 mb-6 pr-2 scrollbar-hide">
@@ -483,17 +474,14 @@ export default function GamePlatform() {
                   })}
                 </div>
                 <form onSubmit={handleSendMessage} className="relative mt-auto">
-                  <input 
-                    value={chatInput} onChange={e => setChatInput(e.target.value)}
+                  <input value={chatInput} onChange={e => setChatInput(e.target.value)}
                     className="w-full bg-black/20 border border-white/10 rounded-[2rem] py-5 pl-6 pr-20 outline-none focus:border-white/30 focus:bg-black/30 placeholder:text-white/20 text-sm font-light transition-all shadow-inner"
-                    placeholder="輸入訊息..."
-                  />
+                    placeholder="輸入訊息..." />
                   <button className="absolute right-2 top-2 bottom-2 px-5 bg-white text-black rounded-[1.5rem] font-medium text-[11px] hover:scale-95 transition-transform shadow-[0_0_15px_rgba(255,255,255,0.2)]">
                     Send
                   </button>
                 </form>
               </div>
-
             </div>
           </div>
         )}
