@@ -13,7 +13,8 @@ import Lobby from '../components/Lobby';
 import WaitingRoom from '../components/WaitingRoom';
 import BoomCat from '../components/BoomCat';
 import DrawGuess from '../components/DrawGuess';
-import Bingo from '../components/Bingo'; // 🎱 新增這行
+import Bingo from '../components/Bingo';
+import AdminPanel from '../components/AdminPanel'; // 🔴 補上這行
 
 export default function GamePlatform() {
   const [user, setUser] = useState(null);
@@ -214,7 +215,7 @@ export default function GamePlatform() {
       <style dangerouslySetInnerHTML={{__html: `@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&family=Outfit:wght@300;400;500;700;900&display=swap'); .vibe-font { font-family: 'Outfit', 'Noto Sans TC', sans-serif; }`}} />
       <div className="vibe-font min-h-screen relative selection:bg-white/20">
         
-        {['loading', 'login', 'lobby'].includes(view) && <AmbientBackground />}
+        {['loading', 'login', 'lobby', 'admin'].includes(view) && <AmbientBackground />}
 
         {view === 'loading' && (
           <div className="h-screen flex items-center justify-center relative z-10">
@@ -246,6 +247,7 @@ export default function GamePlatform() {
             handleLinkGoogle={handleLinkGoogle} changeAvatar={changeAvatar} 
             handleWinGameDemo={handleWinGameDemo} handleCreateRoom={handleCreateRoom} 
             handleJoinRoom={handleJoinRoom} 
+            handleGoAdmin={() => setView('admin')} // 🔴 補上這行，按鈕才有反應
           />
         )}
 
@@ -271,11 +273,18 @@ export default function GamePlatform() {
           />
         )}
 
-        {/* 🎱 新增 Bingo 路由判斷 */}
         {view === 'room' && roomData?.info?.gameMode === 'bingo' && (
           <Bingo 
             user={user} roomId={roomId} roomData={roomData} 
             handleLeaveRoom={handleLeaveRoom} 
+          />
+        )}
+
+        {/* 🔴 最高權限管理員後台：補上這整個區塊 */}
+        {view === 'admin' && (
+          <AdminPanel 
+            user={user} 
+            handleBackToLobby={() => setView('lobby')} 
           />
         )}
 
