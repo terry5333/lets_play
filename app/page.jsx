@@ -8,7 +8,6 @@ import {
 import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove, get, query, orderByChild, limitToLast, increment } from 'firebase/database';
 import { auth, database, googleProvider } from '../lib/firebaseConfig';
 
-// 引入我們剛拆分好的三個元件
 import Lobby from '../components/Lobby';
 import WaitingRoom from '../components/WaitingRoom';
 import BoomCat from '../components/BoomCat';
@@ -103,7 +102,11 @@ export default function GamePlatform() {
         }
 
         const playersList = data.players || {};
-        if (!data.info?.hostId || !playersList[data.info.hostId]) update(ref(database, `rooms/${roomId}/info`), { hostId: user.uid });
+        
+        // 🔥 神級修復：使用精準路徑更新 hostId，絕對不覆蓋 status！
+        if (!data.info?.hostId || !playersList[data.info.hostId]) {
+          update(ref(database), { [`rooms/${roomId}/info/hostId`]: user.uid });
+        }
         
         const playerIds = Object.keys(playersList);
         if (playerIds.length === 1 && playerIds[0] === user.uid) onDisconnect(roomRef).remove();
