@@ -17,11 +17,10 @@ export default function AdminPage() {
   const [sysConfig, setSysConfig] = useState({ maintenance: false });
   const [broadcastMsg, setBroadcastMsg] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // 👁️ 監視狀態
   const [inspectingRoomId, setInspectingRoomId] = useState(null);
   const [inspectingData, setInspectingData] = useState(null);
-
-  // 暫存每個玩家正在輸入的分數
-  const [editingScores, setEditingScores] = useState({});
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
@@ -50,151 +49,220 @@ export default function AdminPage() {
   }, [inspectingRoomId]);
 
   if (loading) return (
-    <div className="h-screen bg-black flex items-center justify-center">
-      <div className="text-rose-500 animate-pulse font-mono tracking-[0.5em]">驗證最高權限中...</div>
+    <div className="h-screen bg-[#E5DCC5] flex items-center justify-center">
+      <div className="text-[#8B2626] font-serif text-2xl tracking-[0.5em] border-2 border-[#8B2626] p-4">身分確認中...</div>
     </div>
   );
 
-  const handleUpdateScore = (uid) => {
-    const newScore = editingScores[uid];
-    if (newScore === undefined || isNaN(newScore)) return;
+  const handleUpdateScore = (uid, newScore) => {
+    if (isNaN(newScore)) return;
     set(ref(database, `users/${uid}/score`), Number(newScore));
-    alert(`玩家積分已更新為: ${newScore}`);
   };
 
-  const handleKillRoom = (id) => confirm(`確定解散房間 ${id}？`) && remove(ref(database, `rooms/${id}`));
+  const handleKillRoom = (id) => confirm(`確定執行【強制解散】指令？ (對象：包廂 ${id})`) && remove(ref(database, `rooms/${id}`));
   
   const handleBroadcast = async () => {
     if (!broadcastMsg.trim()) return;
     const updates = {};
     Object.keys(allRooms).forEach(id => {
       updates[`rooms/${id}/chat/broadcast_${Date.now()}`] = {
-        senderId: 'system', senderName: '📢 系統公告', text: broadcastMsg, timestamp: Date.now()
+        senderId: 'system', senderName: '【中央情報局】', text: broadcastMsg, timestamp: Date.now()
       };
     });
     await update(ref(database), updates);
     setBroadcastMsg('');
-    alert("全服廣播指令已送出");
+    alert("電報已發送至全服。");
   };
 
-  const SidebarItem = ({ id, label, icon }) => (
+  const SidebarItem = ({ id, label }) => (
     <button 
       onClick={() => { setActiveTab(id); setInspectingRoomId(null); }}
-      className={`w-full flex items-center gap-4 px-6 py-4 transition-all ${activeTab === id ? 'bg-rose-600/20 text-rose-500 border-r-4 border-rose-500' : 'text-white/40 hover:bg-white/5'}`}
+      className={`w-full text-left px-6 py-4 transition-all font-serif font-bold text-lg border-b-2 border-[#D4C4A8] ${activeTab === id ? 'bg-[#8B2626] text-[#F4EFEA]' : 'text-[#3E3A39] hover:bg-[#D4C4A8]'}`}
     >
-      <span className="text-lg">{icon}</span>
-      <span className="font-bold tracking-widest">{label}</span>
+      {label}
     </button>
   );
 
+  // --- 👁️ 上帝視角渲染 ---
+  const renderInspector = () => {
+    if (!inspectingData) return <div className="text-[#8B2626] font-serif p-10">讀取機密情報中...</div>;
+    const { info, gameState, players } = inspectingData;
+    
+    return (
+      <div className="animate-in fade-in duration-300">
+        {/* 監視頭部 */}
+        <div className="border-4 border-[#3E3A39] bg-[#E5DCC5] p-6 mb-8 flex justify-between items-end relative">
+          <div className="absolute top-0 right-0 bg-[#8B2626] text-[#E5DCC5] px-4 py-1 font-serif text-sm font-bold">極秘 (SECRET)</div>
+          <div>
+            <button onClick={() => setInspectingRoomId(null)} className="text-[#8B2626] text-sm font-bold mb-2 underline decoration-2">返回卷宗列表</button>
+            <h2 className="text-4xl font-serif font-black text-[#3E3A39] tracking-widest">監視對象：第 {inspectingRoomId} 號室</h2>
+            <p className="font-mono text-[#5A5045] font-bold mt-2">任務代號：{info?.gameMode.toUpperCase()} // 狀態：{gameState?.status.toUpperCase()}</p>
+          </div>
+        </div>
+
+        {/* 💣 炸彈貓透視 */}
+        {info?.gameMode === 'boomcat' && (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+            <div className="border-2 border-[#3E3A39] bg-[#F4EFEA] p-6 shadow-[8px_8px_0_#3E3A39]">
+              <h3 className="text-xl font-serif font-black text-[#8B2626] border-b-2 border-[#8B2626] pb-2 mb-4">預知牌庫 (由上至下)</h3>
+              <div className="flex flex-wrap gap-2">
+                {gameState?.deck?.map((card, i) => (
+                  <div key={i} className={`px-2 py-1 border-2 text-sm font-bold ${card === 'boom' ? 'bg-[#8B2626] text-[#F4EFEA] border-[#8B2626]' : 'bg-white border-[#3E3A39] text-[#3E3A39]'}`}>
+                    {i+1}. {card === 'boom' ? '💥 爆發' : card === 'defuse' ? '🛡️ 解除' : card}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-2 border-[#3E3A39] bg-[#F4EFEA] p-6 shadow-[8px_8px_0_#3E3A39]">
+              <h3 className="text-xl font-serif font-black text-[#3E3A39] border-b-2 border-[#3E3A39] pb-2 mb-4">目標持有物檢查</h3>
+              <div className="space-y-4">
+                {Object.entries(gameState?.hands || {}).map(([uid, hand]) => (
+                  <div key={uid} className="flex flex-col gap-2 p-3 bg-[#E5DCC5] border border-[#D4C4A8]">
+                    <div className="flex items-center gap-2 font-bold text-[#8B2626]">
+                      <img src={players[uid]?.avatar} className="w-6 h-6 rounded-full border border-[#3E3A39] grayscale" />
+                      <span>{players[uid]?.name}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {hand.map((card, i) => (
+                        <span key={i} className="px-2 border border-[#3E3A39] bg-white text-xs font-bold text-[#3E3A39]">{card}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 🎨 你畫我猜透視 */}
+        {info?.gameMode === 'drawguess' && (
+          <div className="border-4 border-[#3E3A39] bg-[#F4EFEA] p-6 shadow-[10px_10px_0_#3E3A39] flex flex-col md:flex-row gap-8">
+            <div className="flex-1">
+              <h3 className="text-xl font-serif font-black text-[#8B2626] mb-4">現場筆跡攔截</h3>
+              <div className="w-full aspect-square border-2 border-[#3E3A39] bg-white relative">
+                {gameState?.status === 'drawing' ? (
+                  <iframe src={`https://wbo.ophir.dev/boards/vibe_dg_${inspectingRoomId}_r${gameState.currentRound}_p${gameState.currentDrawerIdx}`} className="w-full h-full border-none pointer-events-none" scrolling="no" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-[#A69B8D] font-serif">目標目前未在作畫</div>
+                )}
+              </div>
+            </div>
+            <div className="w-full md:w-64">
+              <h3 className="text-xl font-serif font-black text-[#3E3A39] mb-4">機密答案</h3>
+              <div className="bg-[#E5DCC5] border-2 border-[#3E3A39] p-4 text-center text-3xl font-black text-[#8B2626] mb-6">
+                {gameState?.currentWord || '未知'}
+              </div>
+              <h3 className="text-md font-serif font-bold text-[#3E3A39] mb-2">猜對名單</h3>
+              <ul className="list-disc pl-5 font-bold text-[#5A5045]">
+                {gameState?.correctGuesserIds?.map(uid => <li key={uid}>{players[uid]?.name}</li>) || <li>無人答對</li>}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* 🎱 賓果透視 */}
+        {info?.gameMode === 'bingo' && (
+          <div className="space-y-6">
+            <div className="border-2 border-[#8B2626] bg-[#F4EFEA] p-4 text-center">
+              <h3 className="text-lg font-serif font-black text-[#8B2626]">已開出之號碼： {gameState?.calledNumbers?.join(', ') || '尚未開出'}</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-6">
+              {Object.entries(gameState?.playerBoards || {}).map(([uid, board]) => (
+                <div key={uid} className="border-2 border-[#3E3A39] bg-[#E5DCC5] p-4 shadow-[4px_4px_0_#3E3A39]">
+                  <div className="font-bold text-[#3E3A39] mb-2 truncate">{players[uid]?.name} {gameState?.winner === uid && '🏆'}</div>
+                  <div className="grid grid-cols-5 gap-1">
+                    {board.map((num, i) => (
+                      <div key={i} className={`aspect-square flex items-center justify-center text-xs font-bold border border-[#3E3A39] ${gameState?.calledNumbers?.includes(num) ? 'bg-[#8B2626] text-[#F4EFEA]' : 'bg-[#F4EFEA] text-[#3E3A39]'}`}>
+                        {num}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="min-h-screen bg-[#08080a] text-white flex vibe-font">
-      <aside className="w-64 border-r border-white/5 bg-black/40 backdrop-blur-2xl z-20 flex flex-col">
-        <div className="p-8">
-          <h1 className="text-xl font-black text-rose-500 tracking-tighter italic uppercase">GameBar <span className="text-white/80 font-normal">管理後台</span></h1>
+    <div className="min-h-screen bg-[#F4EFEA] text-[#3E3A39] flex" style={{ fontFamily: '"Noto Serif TC", serif' }}>
+      {/* 左側：控制台目錄 */}
+      <aside className="w-64 bg-[#E5DCC5] border-r-4 border-[#3E3A39] z-20 flex flex-col shadow-2xl">
+        <div className="p-8 border-b-4 border-[#3E3A39]">
+          <h1 className="text-2xl font-black tracking-widest text-[#8B2626]">情報管理局</h1>
+          <p className="text-xs font-bold mt-2 text-[#5A5045]">系統管理與處分中心</p>
         </div>
         <nav className="flex-1 mt-4">
-          <SidebarItem id="rooms" label="即時包廂監控" icon="📡" />
-          <SidebarItem id="players" label="全服玩家數據" icon="👥" />
-          <SidebarItem id="system" label="系統核心設定" icon="⚡" />
+          <SidebarItem id="rooms" label="卷宗 壹：包廂監視" />
+          <SidebarItem id="players" label="卷宗 貳：國民情報" />
+          <SidebarItem id="system" label="卷宗 參：總部廣播" />
         </nav>
-        <div className="p-6 border-t border-white/5">
-          <button onClick={() => router.push('/')} className="w-full py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold transition-all text-white/50 hover:text-white">退出後台</button>
+        <div className="p-6 border-t-4 border-[#3E3A39] bg-[#D4C4A8]">
+          <button onClick={() => router.push('/')} className="w-full py-3 border-2 border-[#3E3A39] bg-[#F4EFEA] font-bold text-sm hover:bg-[#3E3A39] hover:text-[#F4EFEA] transition-colors shadow-[4px_4px_0_#3E3A39] active:shadow-none active:translate-x-1 active:translate-y-1">退出管理部</button>
         </div>
       </aside>
 
-      <main className="flex-1 h-screen overflow-y-auto z-10 p-8 lg:p-12">
-        {inspectingRoomId ? (
-          <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-right-4 duration-500">
-            <button onClick={() => setInspectingRoomId(null)} className="text-rose-500 text-xs font-bold mb-4 hover:underline">← 返回清單</button>
-            <h2 className="text-4xl font-black mb-8 tracking-tighter">監視中包廂：#{inspectingRoomId}</h2>
-            {inspectingData ? (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <div className="bg-white/[0.03] border border-white/10 rounded-[2.5rem] p-8 shadow-2xl">
-                  <h3 className="text-rose-500 font-bold mb-6 tracking-widest uppercase text-sm">包廂數據摘要</h3>
-                  <div className="space-y-4 font-mono text-sm">
-                    <p className="flex justify-between border-b border-white/5 pb-2"><span>遊戲模式:</span> <span className="text-emerald-400">{inspectingData.info?.gameMode}</span></p>
-                    <p className="flex justify-between border-b border-white/5 pb-2"><span>當前狀態:</span> <span className="text-yellow-400">{inspectingData.gameState?.status}</span></p>
-                    <p className="flex justify-between border-b border-white/5 pb-2"><span>玩家人數:</span> <span>{Object.keys(inspectingData.players || {}).length}</span></p>
-                  </div>
-                </div>
-              </div>
-            ) : <p className="text-white/20">同步數據中...</p>}
-          </div>
-        ) : (
-          <div className="max-w-7xl mx-auto animate-in fade-in duration-500">
-            {/* 1. 包廂監控 */}
+      {/* 右側：檔案庫主畫面 */}
+      <main className="flex-1 h-screen overflow-y-auto p-10 bg-[url('https://www.transparenttextures.com/patterns/rice-paper.png')]">
+        {inspectingRoomId ? renderInspector() : (
+          <div className="max-w-6xl mx-auto animate-in fade-in duration-500">
+            
+            {/* 1. 包廂監視 */}
             {activeTab === 'rooms' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
                 {Object.entries(allRooms).map(([id, room]) => (
-                  <div key={id} className="bg-white/[0.03] border border-white/10 rounded-[2.5rem] p-8 hover:bg-white/[0.05] transition-all group">
-                    <div className="flex justify-between items-start mb-6">
-                      <div>
-                        <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest bg-rose-500/10 px-2 py-1 rounded">{room.info?.gameMode}</span>
-                        <h3 className="text-4xl font-mono font-black mt-2 tracking-tighter">#{id}</h3>
-                      </div>
-                      <div className={`w-3 h-3 rounded-full ${room.info?.status === 'waiting' ? 'bg-yellow-500' : 'bg-emerald-500'} shadow-[0_0_15px_currentColor]`}></div>
+                  <div key={id} className="border-4 border-[#3E3A39] bg-[#E5DCC5] p-6 shadow-[8px_8px_0_#3E3A39] flex flex-col relative">
+                    <div className="absolute top-2 right-4 text-[#8B2626] font-black text-xl opacity-20 transform rotate-12">極秘</div>
+                    <div className="mb-4 border-b-2 border-[#3E3A39] pb-4">
+                      <span className="bg-[#3E3A39] text-[#F4EFEA] px-2 py-1 text-xs font-bold tracking-widest">{room.info?.gameMode === 'boomcat' ? '炸彈貓' : room.info?.gameMode === 'drawguess' ? '你畫我猜' : '賓果'}</span>
+                      <h3 className="text-4xl font-mono font-black mt-3 text-[#8B2626]">#{id}</h3>
                     </div>
-                    <div className="flex flex-col gap-3">
-                      <button onClick={() => setInspectingRoomId(id)} className="w-full py-3 bg-white text-black rounded-xl font-bold text-xs hover:scale-[1.02] transition-transform">👁️ 上帝視角</button>
-                      <button onClick={() => handleKillRoom(id)} className="w-full py-3 bg-rose-600/10 text-rose-500 border border-rose-500/20 rounded-xl font-bold text-xs hover:bg-rose-500 hover:text-white transition-all">強制解散</button>
+                    <div className="flex gap-4 mt-auto pt-4">
+                      <button onClick={() => setInspectingRoomId(id)} className="flex-1 py-2 border-2 border-[#3E3A39] bg-white font-bold text-sm hover:bg-[#3E3A39] hover:text-white transition-colors shadow-[4px_4px_0_#3E3A39] active:shadow-none active:translate-y-1 active:translate-x-1">👁️ 調查</button>
+                      <button onClick={() => handleKillRoom(id)} className="flex-1 py-2 border-2 border-[#8B2626] bg-[#8B2626] text-white font-bold text-sm hover:bg-rose-700 transition-colors shadow-[4px_4px_0_#3E3A39] active:shadow-none active:translate-y-1 active:translate-x-1">處分</button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* 2. 玩家管理 (重點修正：積分輸入) */}
+            {/* 2. 國民情報 */}
             {activeTab === 'players' && (
-              <div className="bg-white/[0.02] border border-white/10 rounded-[3rem] overflow-hidden backdrop-blur-xl shadow-2xl">
-                <div className="p-8 border-b border-white/5 flex justify-between items-center">
-                  <h3 className="font-bold text-white/50 tracking-widest uppercase text-xs">全球玩家數據中心</h3>
-                  <input 
-                    type="text" placeholder="搜尋玩家名稱或 UID..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                    className="bg-white/5 border border-white/10 rounded-full px-6 py-2 text-xs outline-none focus:border-rose-500/50 w-64 transition-all"
-                  />
+              <div className="border-4 border-[#3E3A39] bg-[#E5DCC5] shadow-[12px_12px_0_#3E3A39] overflow-hidden">
+                <div className="p-6 border-b-4 border-[#3E3A39] flex justify-between items-center bg-[#D4C4A8]">
+                  <h3 className="font-black text-[#8B2626] tracking-widest text-xl">全域身家調查表</h3>
+                  <input type="text" placeholder="搜尋姓名..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="border-2 border-[#3E3A39] bg-[#F4EFEA] px-4 py-2 font-bold outline-none focus:bg-white" />
                 </div>
-                <table className="w-full text-left">
+                <table className="w-full text-left font-bold">
                   <thead>
-                    <tr className="bg-white/[0.03] text-[10px] text-white/30 uppercase tracking-widest">
-                      <th className="px-10 py-5">玩家身份</th>
-                      <th className="px-6 py-5">當前狀態</th>
-                      <th className="px-6 py-5">修改積分 (輸入數值)</th>
-                      <th className="px-10 py-5 text-right">危險操作</th>
+                    <tr className="bg-[#3E3A39] text-[#F4EFEA] tracking-widest">
+                      <th className="px-6 py-4">國民姓名</th>
+                      <th className="px-6 py-4">行蹤</th>
+                      <th className="px-6 py-4">配給點數</th>
+                      <th className="px-6 py-4 text-right">行政手續</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/5">
+                  <tbody className="divide-y-2 divide-[#3E3A39]">
                     {Object.entries(allUsers).filter(([uid, u]) => u.name?.includes(searchQuery)).map(([uid, u]) => (
-                      <tr key={uid} className="hover:bg-white/[0.02] transition-colors">
-                        <td className="px-10 py-5 flex items-center gap-4">
-                          <img src={u.avatar} className="w-10 h-10 rounded-full border border-white/10" />
-                          <div>
-                            <div className="font-bold text-sm">{u.name}</div>
-                            <div className="text-[9px] text-white/20 font-mono tracking-tighter">{uid}</div>
-                          </div>
+                      <tr key={uid} className="hover:bg-[#D4C4A8] transition-colors">
+                        <td className="px-6 py-4 flex items-center gap-4">
+                          <img src={u.avatar} className="w-10 h-10 border-2 border-[#3E3A39] grayscale sepia" />
+                          <div className="text-lg text-[#8B2626]">{u.name}</div>
                         </td>
-                        <td className="px-6 py-5">
-                          {u.currentRoom ? <span className="text-rose-500 font-mono text-xs animate-pulse">連線中 #{u.currentRoom}</span> : <span className="text-white/20 text-xs">大廳閒置</span>}
-                        </td>
-                        <td className="px-6 py-5">
-                          <div className="flex items-center gap-3">
+                        <td className="px-6 py-4">{u.currentRoom ? `第 ${u.currentRoom} 號室` : '遊蕩中'}</td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
                             <input 
-                              type="number"
-                              placeholder={u.score || 0}
-                              className="w-24 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-yellow-400 font-mono font-bold text-sm outline-none focus:border-yellow-400 focus:shadow-[0_0_10px_rgba(250,204,21,0.2)] transition-all"
-                              onChange={(e) => setEditingScores({ ...editingScores, [uid]: e.target.value })}
-                              onKeyDown={(e) => e.key === 'Enter' && handleUpdateScore(uid)}
+                              type="number" defaultValue={u.score || 0}
+                              onBlur={(e) => handleUpdateScore(uid, e.target.value)}
+                              className="w-24 border-2 border-[#3E3A39] bg-white px-2 py-1 text-center outline-none focus:bg-yellow-100"
                             />
-                            <button 
-                              onClick={() => handleUpdateScore(uid)}
-                              className="text-[10px] font-black text-white/40 hover:text-yellow-400 transition-colors uppercase tracking-widest"
-                            >
-                              更新
-                            </button>
                           </div>
                         </td>
-                        <td className="px-10 py-5 text-right">
-                          <button onClick={() => confirm("確定抹除此玩家數據？") && remove(ref(database, `users/${uid}`))} className="text-[10px] font-bold text-rose-500 bg-rose-500/10 px-4 py-2 rounded-xl border border-rose-500/20 hover:bg-rose-500 hover:text-white transition-all uppercase tracking-widest">徹底刪除</button>
+                        <td className="px-6 py-4 text-right">
+                          <button onClick={() => confirm("執行抹消？") && remove(ref(database, `users/${uid}`))} className="border-2 border-[#8B2626] text-[#8B2626] bg-[#F4EFEA] px-4 py-1 font-black hover:bg-[#8B2626] hover:text-white transition-colors">抹消</button>
                         </td>
                       </tr>
                     ))}
@@ -203,33 +271,18 @@ export default function AdminPage() {
               </div>
             )}
 
-            {/* 3. 系統設定 */}
+            {/* 3. 系統廣播 */}
             {activeTab === 'system' && (
-              <div className="max-w-3xl mx-auto space-y-8">
-                <div className="bg-white/[0.03] border border-white/10 rounded-[3rem] p-10 backdrop-blur-xl shadow-2xl">
-                  <h3 className="text-xl font-black mb-2 text-rose-500 italic uppercase">Global Broadcast // 全服廣播</h3>
-                  <p className="text-white/30 text-xs mb-8">發送訊息至所有正在運行中包廂的聊天室。</p>
-                  <div className="space-y-4">
-                    <textarea 
-                      value={broadcastMsg} onChange={e => setBroadcastMsg(e.target.value)}
-                      placeholder="請輸入廣播內容..."
-                      className="w-full bg-black/40 border border-white/10 rounded-[2rem] p-6 text-sm outline-none focus:border-rose-500/50 min-h-[120px] transition-all"
-                    />
-                    <button onClick={handleBroadcast} className="w-full py-4 bg-rose-600 text-white rounded-[2rem] font-black tracking-[0.2em] hover:bg-rose-500 shadow-xl shadow-rose-950/50 transition-all uppercase">執行廣播指令</button>
-                  </div>
-                </div>
-
-                <div className="bg-white/[0.03] border border-white/10 rounded-[3rem] p-10 flex justify-between items-center shadow-2xl">
-                  <div>
-                    <h3 className="text-xl font-black text-white/80">伺服器維修模式</h3>
-                    <p className="text-white/30 text-xs mt-1 tracking-widest">開啟後將鎖定大廳，禁止創建新包廂。</p>
-                  </div>
-                  <button 
-                    onClick={() => set(ref(database, 'system/config/maintenance'), !sysConfig.maintenance)}
-                    className={`px-8 py-3 rounded-full font-bold text-xs transition-all border ${sysConfig.maintenance ? 'bg-rose-600 border-rose-400 text-white shadow-[0_0_15px_#f43f5e]' : 'bg-white/10 border-white/20 text-white/40 hover:text-white'}`}
-                  >
-                    {sysConfig.maintenance ? '系統維護中' : '伺服器運行中'}
-                  </button>
+              <div className="max-w-2xl border-4 border-[#3E3A39] bg-[#E5DCC5] p-10 shadow-[12px_12px_0_#3E3A39]">
+                <h3 className="text-3xl font-black mb-2 text-[#8B2626] tracking-widest border-b-4 border-[#3E3A39] pb-4">緊急廣播發報機</h3>
+                <p className="text-[#5A5045] font-bold mb-8 mt-4">此電報將會強制發送至所有國民之終端畫面。</p>
+                <div className="space-y-6">
+                  <textarea 
+                    value={broadcastMsg} onChange={e => setBroadcastMsg(e.target.value)}
+                    placeholder="輸入電文..."
+                    className="w-full border-4 border-[#3E3A39] bg-[#F4EFEA] p-4 font-bold outline-none focus:bg-white min-h-[150px]"
+                  />
+                  <button onClick={handleBroadcast} className="w-full py-4 border-4 border-[#8B2626] bg-[#8B2626] text-[#F4EFEA] font-black text-xl tracking-[0.5em] hover:bg-rose-800 transition-colors shadow-[6px_6px_0_#3E3A39] active:shadow-none active:translate-y-1 active:translate-x-1">發送電報</button>
                 </div>
               </div>
             )}
