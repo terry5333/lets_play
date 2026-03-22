@@ -14,7 +14,6 @@ import WaitingRoom from '../components/WaitingRoom';
 import BoomCat from '../components/BoomCat';
 import DrawGuess from '../components/DrawGuess';
 import Bingo from '../components/Bingo';
-import AdminPanel from '../components/AdminPanel'; // 🔴 補上這行
 
 export default function GamePlatform() {
   const [user, setUser] = useState(null);
@@ -132,7 +131,7 @@ export default function GamePlatform() {
       } else {
         await signInWithEmailAndPassword(auth, fakeEmail, password);
       }
-    } catch (err) { alert("驗證失敗"); }
+    } catch (err) { alert("驗證失敗，請檢查帳號密碼"); }
   };
 
   const handleGoogleLogin = async () => {
@@ -176,16 +175,37 @@ export default function GamePlatform() {
     update(ref(database), updates).then(() => { setRoomId(newRoomId); setView('room'); });
   };
 
+  // 💡 核心修復區：完美的「加入房間」安全檢查
   const handleJoinRoom = async (joinInput) => {
     const roomSnap = await get(ref(database, `rooms/${joinInput}`));
-    if (!roomSnap.exists()) return alert("找不到房間！");
+    if (!roomSnap.exists()) return alert("找不到此包廂！");
     
-    const roomInfo = roomSnap.val().info;
-    const currentPlayersCount = Object.keys(roomSnap.val().players || {}).length;
-    if (roomInfo?.rules?.maxPlayers && currentPlayersCount >= roomInfo.rules.maxPlayers) {
-      return alert(`房間已滿！上限為 ${roomInfo.rules.maxPlayers} 人。`);
+    const roomData = roomSnap.val();
+    const playersList = roomData.players || {};
+    const currentPlayersCount = Object.keys(playersList).length;
+
+    // 🛑 斷線重連判定：確認該玩家是否原本就「已經在遊戲名單中」
+    const isAlreadyInRoom = !!playersList[user.uid];
+    const wasInGameQueue = roomData.gameState?.playerQueue?.includes(user.uid);
+    const wasInBoomcat = roomData.gameState?.turnOrder?.includes(user.uid);
+    const isReconnecting = isAlreadyInRoom || wasInGameQueue || wasInBoomcat;
+
+    if (!isReconnecting) {
+      // 🛑 防護 1：遊戲是否已經開始？
+      const isBoomcatPlaying = roomData.info?.status === 'playing';
+      const isOtherGamePlaying = roomData.gameState?.status && roomData.gameState?.status !== 'waiting';
+
+      if (isBoomcatPlaying || isOtherGamePlaying) {
+        return alert("⚠️ 這間包廂的遊戲已經開始了，無法中途加入喔！");
+      }
+
+      // 🛑 防護 2：人數上限檢查
+      if (roomData.info?.rules?.maxPlayers && currentPlayersCount >= roomData.info.rules.maxPlayers) {
+        return alert(`⚠️ 包廂已滿！上限為 ${roomData.info.rules.maxPlayers} 人。`);
+      }
     }
 
+    // 驗證通過，執行加入動作
     const updates = {};
     updates[`rooms/${joinInput}/players/${user.uid}`] = { uid: user.uid, name: user.displayName, avatar: user.photoURL, joinedAt: serverTimestamp() };
     updates[`users/${user.uid}/currentRoom`] = joinInput;
@@ -215,7 +235,7 @@ export default function GamePlatform() {
       <style dangerouslySetInnerHTML={{__html: `@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&family=Outfit:wght@300;400;500;700;900&display=swap'); .vibe-font { font-family: 'Outfit', 'Noto Sans TC', sans-serif; }`}} />
       <div className="vibe-font min-h-screen relative selection:bg-white/20">
         
-        {['loading', 'login', 'lobby', 'admin'].includes(view) && <AmbientBackground />}
+        {['loading', 'login', 'lobby'].includes(view) && <AmbientBackground />}
 
         {view === 'loading' && (
           <div className="h-screen flex items-center justify-center relative z-10">
@@ -247,7 +267,6 @@ export default function GamePlatform() {
             handleLinkGoogle={handleLinkGoogle} changeAvatar={changeAvatar} 
             handleWinGameDemo={handleWinGameDemo} handleCreateRoom={handleCreateRoom} 
             handleJoinRoom={handleJoinRoom} 
-            handleGoAdmin={() => setView('admin')} // 🔴 補上這行，按鈕才有反應
           />
         )}
 
@@ -277,14 +296,6 @@ export default function GamePlatform() {
           <Bingo 
             user={user} roomId={roomId} roomData={roomData} 
             handleLeaveRoom={handleLeaveRoom} 
-          />
-        )}
-
-        {/* 🔴 最高權限管理員後台：補上這整個區塊 */}
-        {view === 'admin' && (
-          <AdminPanel 
-            user={user} 
-            handleBackToLobby={() => setView('lobby')} 
           />
         )}
 
