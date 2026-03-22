@@ -3,12 +3,12 @@
 import { useState, useEffect } from 'react';
 import { 
   signInWithEmailAndPassword, createUserWithEmailAndPassword, 
-  signInWithPopup, onAuthStateChanged, signOut, updateProfile, linkWithPopup
+  signInWithPopup, onAuthStateChanged, signOut, updateProfile
 } from 'firebase/auth';
-import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove, get, query, orderByChild, limitToLast, increment } from 'firebase/database';
+import { ref, onValue, set, update, push, serverTimestamp, onDisconnect, remove, get, query, orderByChild, limitToLast } from 'firebase/database';
 import { auth, database, googleProvider } from '../lib/firebaseConfig';
 
-// 引入所有子元件
+// 子元件
 import Lobby from '../components/Lobby';
 import WaitingRoom from '../components/WaitingRoom';
 import BoomCat from '../components/BoomCat';
@@ -28,18 +28,31 @@ export default function GamePlatform() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [myScore, setMyScore] = useState(0); 
 
+  // 🎇 環繞背景元件
+  const AmbientBackground = () => (
+    <div className="fixed inset-0 overflow-hidden pointer-events-none z-0 bg-[#070709]">
+      <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-indigo-600/10 blur-[120px] rounded-full mix-blend-screen animate-pulse duration-[10s]"></div>
+      <div className="absolute top-[40%] -right-[10%] w-[50%] h-[50%] bg-cyan-600/10 blur-[120px] rounded-full mix-blend-screen"></div>
+      <div className="absolute -bottom-[20%] left-[20%] w-[40%] h-[40%] bg-purple-600/10 blur-[100px] rounded-full mix-blend-screen"></div>
+    </div>
+  );
+
   useEffect(() => {
     let userScoreUnsub; 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        let activeAvatar = currentUser.photoURL || `https://api.dicebear.com/7.x/micah/svg?seed=${currentUser.uid}`;
+        const activeAvatar = currentUser.photoURL || `https://api.dicebear.com/7.x/micah/svg?seed=${currentUser.uid}`;
         setUser({ ...currentUser, photoURL: activeAvatar });
         
         const userRef = ref(database, `users/${currentUser.uid}`);
         const userSnap = await get(userRef);
         const userData = userSnap.val() || {};
         
-        await update(userRef, { name: currentUser.displayName || '無名氏', avatar: activeAvatar, score: userData.score || 0 });
+        await update(userRef, { 
+          name: currentUser.displayName || '無名氏', 
+          avatar: activeAvatar, 
+          score: userData.score ?? 0 
+        });
 
         userScoreUnsub = onValue(userRef, (snap) => {
           if (snap.exists()) setMyScore(snap.val().score || 0);
@@ -64,7 +77,10 @@ export default function GamePlatform() {
       const topUsersQuery = query(ref(database, 'users'), orderByChild('score'), limitToLast(10));
       return onValue(topUsersQuery, (snapshot) => {
         const data = snapshot.val();
-        if (data) setLeaderboard(Object.values(data).sort((a, b) => b.score - a.score));
+        if (data) {
+          const list = Object.values(data).sort((a, b) => b.score - a.score);
+          setLeaderboard(list);
+        }
       });
     }
   }, [view]);
@@ -75,10 +91,11 @@ export default function GamePlatform() {
       const myPlayerRef = ref(database, `rooms/${roomId}/players/${user.uid}`);
       onDisconnect(myPlayerRef).remove();
       set(myPlayerRef, { uid: user.uid, name: user.displayName, avatar: user.photoURL, joinedAt: serverTimestamp() });
+      
       return onValue(roomRef, (snapshot) => {
         const data = snapshot.val();
         if (!data || !data.players?.[user.uid]) {
-          remove(ref(database, `users/${user.uid}/currentRoom`));
+          update(ref(database, `users/${user.uid}`), { currentRoom: null });
           setRoomId('');
           setView('lobby');
         } else {
@@ -98,7 +115,10 @@ export default function GamePlatform() {
 
     if (!isReconnecting && (isPlaying || isFull)) return alert(isPlaying ? "遊戲已開始，無法加入！" : "包廂已滿！");
 
-    const updates = { [`rooms/${joinInput}/players/${user.uid}`]: { uid: user.uid, name: user.displayName, avatar: user.photoURL, joinedAt: serverTimestamp() }, [`users/${user.uid}/currentRoom`]: joinInput };
+    const updates = { 
+      [`rooms/${joinInput}/players/${user.uid}`]: { uid: user.uid, name: user.displayName, avatar: user.photoURL, joinedAt: serverTimestamp() }, 
+      [`users/${user.uid}/currentRoom`]: joinInput 
+    };
     update(ref(database), updates).then(() => { setRoomId(joinInput); setView('room'); });
   };
 
@@ -114,40 +134,58 @@ export default function GamePlatform() {
 
   const handleLeaveRoom = async () => {
     const updates = { [`users/${user.uid}/currentRoom`]: null };
-    if (Object.keys(roomData?.players || {}).length <= 1) updates[`rooms/${roomId}`] = null;
+    if (roomData && Object.keys(roomData.players || {}).length <= 1) updates[`rooms/${roomId}`] = null;
     else updates[`rooms/${roomId}/players/${user.uid}`] = null;
     await update(ref(database), updates);
   };
 
   return (
-    <div className="vibe-font min-h-screen bg-[#070709] text-white">
+    <div className="vibe-font min-h-screen bg-[#070709] text-white selection:bg-white/20">
       <style dangerouslySetInnerHTML={{__html: `@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&family=Outfit:wght@300;400;500;700;900&display=swap'); .vibe-font { font-family: 'Outfit', 'Noto Sans TC', sans-serif; }`}} />
+      
+      {['loading', 'login', 'lobby'].includes(view) && <AmbientBackground />}
+
+      {view === 'loading' && (
+        <div className="h-screen flex items-center justify-center relative z-10">
+          <div className="animate-pulse font-light text-white/70 tracking-[0.5em] text-sm">SYNCING VIBE...</div>
+        </div>
+      )}
+
       {view === 'login' && (
-        <div className="h-screen flex items-center justify-center p-6">
-          <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-[3rem] p-10 text-center">
-            <h1 className="text-3xl font-black mb-8">GAME BAR</h1>
+        <div className="h-screen flex items-center justify-center p-6 relative z-10">
+          <div className="w-full max-w-md bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-[3rem] p-10 shadow-2xl">
+            <h1 className="text-3xl font-black mb-8 text-center tracking-widest italic uppercase">Game Bar</h1>
             <form onSubmit={async (e) => {
               e.preventDefault();
-              const email = `${username}@gamebar.local`;
-              if (isRegister) {
-                const res = await createUserWithEmailAndPassword(auth, email, password);
-                await updateProfile(res.user, { displayName: nickname });
-              } else {
-                await signInWithEmailAndPassword(auth, email, password);
-              }
+              const email = `${username.toLowerCase()}@gamebar.local`;
+              try {
+                if (isRegister) {
+                  const res = await createUserWithEmailAndPassword(auth, email, password);
+                  await updateProfile(res.user, { displayName: nickname });
+                } else {
+                  await signInWithEmailAndPassword(auth, email, password);
+                }
+              } catch(err) { alert("驗證失敗"); }
             }} className="space-y-4">
-              {isRegister && <input type="text" placeholder="暱稱" value={nickname} onChange={e=>setNickname(e.target.value)} className="w-full bg-black/20 border border-white/10 rounded-full py-4 px-6 outline-none focus:border-white/40" />}
-              <input type="text" placeholder="帳號" value={username} onChange={e=>setUsername(e.target.value)} className="w-full bg-black/20 border border-white/10 rounded-full py-4 px-6 outline-none focus:border-white/40" />
-              <input type="password" placeholder="密碼" value={password} onChange={e=>setPassword(e.target.value)} className="w-full bg-black/20 border border-white/10 rounded-full py-4 px-6 outline-none focus:border-white/40" />
-              <button className="w-full py-4 bg-white text-black rounded-full font-bold">{isRegister ? '註冊' : '登入'}</button>
+              {isRegister && <input type="text" placeholder="顯示暱稱" value={nickname} onChange={e=>setNickname(e.target.value)} required className="w-full bg-black/20 border border-white/10 rounded-full py-4 px-6 outline-none" />}
+              <input type="text" placeholder="帳號" value={username} onChange={e=>setUsername(e.target.value)} required className="w-full bg-black/20 border border-white/10 rounded-full py-4 px-6 outline-none" />
+              <input type="password" placeholder="密碼" value={password} onChange={e=>setPassword(e.target.value)} required className="w-full bg-black/20 border border-white/10 rounded-full py-4 px-6 outline-none" />
+              <button className="w-full py-4 bg-white text-black rounded-full font-black uppercase shadow-lg shadow-white/10">{isRegister ? '註冊通行證' : '進入系統'}</button>
             </form>
-            <button onClick={() => setIsRegister(!isRegister)} className="mt-6 text-xs text-white/40">{isRegister ? '返回登入' : '沒有帳號？按此註冊'}</button>
+            <button onClick={() => setIsRegister(!isRegister)} className="w-full mt-6 text-xs text-white/30 hover:text-white transition-colors">{isRegister ? '返回登入' : '申請加入遊戲城'}</button>
           </div>
         </div>
       )}
-      {view === 'lobby' && <Lobby user={user} myScore={myScore} leaderboard={leaderboard} changeAvatar={changeAvatar} handleCreateRoom={handleCreateRoom} handleJoinRoom={handleJoinRoom} />}
+
+      {view === 'lobby' && (
+        <Lobby 
+          user={user} myScore={myScore} leaderboard={leaderboard} 
+          handleCreateRoom={handleCreateRoom} handleJoinRoom={handleJoinRoom} 
+        />
+      )}
+
       {view === 'room' && (
-        <>
+        <div className="relative z-10 h-screen overflow-hidden">
           {roomData?.info?.status === 'waiting' ? (
             <WaitingRoom user={user} roomId={roomId} roomData={roomData} isHost={roomData?.info?.hostId === user?.uid} handleLeaveRoom={handleLeaveRoom} />
           ) : (
@@ -158,7 +196,7 @@ export default function GamePlatform() {
               {roomData?.info?.gameMode === 'evilfills' && <EvilFills user={user} roomId={roomId} roomData={roomData} handleLeaveRoom={handleLeaveRoom} />}
             </>
           )}
-        </>
+        </div>
       )}
     </div>
   );
