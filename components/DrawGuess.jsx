@@ -20,7 +20,7 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
   const isMyTurnToDraw = currentDrawerUid === user?.uid;
   const currentWord = gameState.currentWord || '';
 
-  // 💡 神級修復：畫布等比例縮放引擎
+  // 💡 畫布等比例縮放引擎
   const boardWrapperRef = useRef(null);
   const [boardScale, setBoardScale] = useState(1);
 
@@ -28,7 +28,6 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     if (!boardWrapperRef.current) return;
     const observer = new ResizeObserver((entries) => {
       for (let entry of entries) {
-        // 我們強制把內部畫布當成 1000px，然後根據外框真實寬度進行等比例 scale 縮放
         setBoardScale(entry.contentRect.width / 1000); 
       }
     });
@@ -56,17 +55,20 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
     }
   }, [gameState.status, isMyTurnToDraw]);
 
-  // 🎮 遊戲流程：房主按下開始按鈕
+  // 🎮 遊戲流程：房主按下開始按鈕 (💡 修正：使用正確的 Firebase Update 物件格式)
   const startGame = () => {
     const players = Object.keys(roomData.players);
-    update(ref(database, `rooms/${roomId}/info/status`), 'playing');
-    update(ref(database, `rooms/${roomId}/gameState`), {
+    const updates = {};
+    updates[`rooms/${roomId}/info/status`] = 'playing';
+    updates[`rooms/${roomId}/gameState`] = {
       status: 'selecting',
       currentDrawerIdx: 0,
       currentRound: 1,
       playerQueue: players.sort(() => 0.5 - Math.random()), 
       scores: {}
-    });
+    };
+    
+    update(ref(database), updates);
     push(ref(database, `rooms/${roomId}/chat`), { senderId: 'system', senderName: '系統', text: '🚀 遊戲開始！準備發揮你的靈魂畫技！', timestamp: Date.now() });
   };
 
@@ -153,8 +155,11 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
       </div>
 
       <div className="flex justify-between items-center p-4 md:p-6 z-10">
-        <button onClick={handleLeaveRoom} className="bg-white/5 hover:bg-white/10 px-5 py-2 rounded-full border border-white/10 text-xs font-bold transition-all backdrop-blur-md">← 退出</button>
-        <div className="flex flex-col items-center">
+        <div className="flex-1 flex justify-start">
+          <button onClick={handleLeaveRoom} className="bg-white/5 hover:bg-white/10 px-5 py-2 rounded-full border border-white/10 text-xs font-bold transition-all backdrop-blur-md">← 退出</button>
+        </div>
+        
+        <div className="flex-1 flex flex-col items-center">
           <div className="bg-emerald-500/10 border border-emerald-500/30 px-6 py-2 rounded-full shadow-[0_0_20px_rgba(16,185,129,0.2)] backdrop-blur-md">
             <span className="font-black tracking-widest text-xs text-emerald-400 uppercase">
               {gameState.status === 'waiting' ? '準備中' : gameState.status === 'selecting' ? '畫家選詞中' : gameState.status === 'drawing' ? `⏱️ 剩餘 ${timeLeft} 秒` : '回合結算'}
@@ -164,14 +169,20 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             <span className="text-[10px] text-white/40 font-mono mt-2 tracking-[0.3em] uppercase">Round {gameState.currentRound || 1} / {rules.drawRounds}</span>
           )}
         </div>
-        <div className="w-16"></div> 
+
+        {/* 💡 修正：右上角顯示精美的房號標籤 */}
+        <div className="flex-1 flex justify-end">
+          <div className="bg-white/10 border border-white/10 px-4 py-1.5 rounded-full backdrop-blur-md shadow-inner">
+            <span className="text-[10px] text-white/50 tracking-widest font-bold mr-2 uppercase">ROOM</span>
+            <span className="font-mono font-black text-sm tracking-widest text-white">{roomId}</span>
+          </div>
+        </div> 
       </div>
 
       <div className="flex-1 flex flex-col xl:flex-row gap-6 p-4 md:p-8 z-10 overflow-hidden relative max-w-[1920px] mx-auto w-full">
         
         <div className="flex-[4] flex flex-col h-full relative items-center justify-center min-h-[50vh]">
           
-          {/* 💡 狀態 0: 等待房主開始 (按鈕回來了！) */}
           {gameState.status === 'waiting' && (
             <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-xl rounded-[2.5rem] border border-white/10 flex flex-col items-center justify-center p-8 m-auto w-full max-w-[800px] aspect-square shadow-2xl animate-in zoom-in duration-300">
               <h2 className="text-4xl font-black mb-8 text-emerald-400 drop-shadow-[0_0_20px_rgba(16,185,129,0.5)] tracking-widest">🎨 準備作畫</h2>
@@ -240,7 +251,6 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
             </div>
           )}
 
-          {/* 🎨 神級縮放白板容器 */}
           <div ref={boardWrapperRef} className="w-full max-w-[800px] mx-auto aspect-square bg-white rounded-[2.5rem] shadow-[0_0_50px_rgba(0,0,0,0.5)] relative overflow-hidden group">
             {gameState.status === 'drawing' && (
               <div className="absolute top-4 md:top-6 left-0 right-0 flex justify-center pointer-events-none z-20">
@@ -255,7 +265,6 @@ export default function DrawGuess({ user, roomId, roomData, handleLeaveRoom }) {
               </div>
             )}
 
-            {/* 這裡的 transform 魔法會讓 1000px 的畫布完美縮放塞進使用者的螢幕裡 */}
             <div 
               className="absolute top-0 left-0" 
               style={{ 
